@@ -1,0 +1,250 @@
+---
+title: "Workshop 1"
+author: "Josh Goldberg"
+date: "`r format(Sys.time(), '%B, %d %Y')`"
+always_allow_html: yes
+output:
+  github_document: 
+  pdf_document: default
+editor_options: 
+  chunk_output_type: inline
+---
+
+```{r Global-options, include=FALSE}
+knitr::opts_chunk$set(fig.width=6, fig.height=4, fig.path='Figs/',
+                      warning=FALSE, message=FALSE, cache=TRUE)
+```
+
+```{r Preamble, echo=FALSE}
+# Enter package in p_load()
+# If package is not installed, p_load() will install and load the package
+if(!"pacman" %in% rownames(installed.packages())) {
+  install.packages("pacman")
+  }
+pacman::p_load(tidyverse, ggthemes, here)
+
+# Set default ggplot theme to tufte
+theme_set(ggthemes::theme_tufte())
+```
+
+```{r Copy-files, echo=FALSE, eval=FALSE}
+# Enter files to load to project directory in from = "~/Downloads/your_file_name_here"
+file.copy(from = "~/Downloads/documents-MScA Bayesian Methods (32014)-MScA 32014 Lecture 1-3WayData.csv", to = here::here(), 
+          overwrite = TRUE, recursive = FALSE, 
+          copy.mode = TRUE)
+```
+
+# Joint Distribution: 3-Dimensional Case
+```{r}
+u <- c("u1", "u2")
+v <- c("v1", "v2", "v3")
+w <- c("w1", "w2", "w3")
+matr.u0 <- paste("u0", outer(v, w, paste, sep = ","), sep = ",")
+dim(matr.u0) <- c(3, 3)
+matr.u1 <- paste("u1", outer(v, w, paste, sep = ","), sep = ",")
+dim(matr.u1) <- c(3, 3)
+matr.u0
+```
+
+```{r Read-data}
+data3way <-
+  read_delim("documents-MScA Bayesian Methods (32014)-MScA 32014 Lecture 1-3WayData.csv",
+             delim = ",") %>%
+  data.frame()
+```
+
+```{r}
+head(data3way)
+```
+
+```{r}
+mat.u0 <- table(subset(data3way, u == 0)[, 1], subset(data3way, u == 0)[, 2])
+mat.u1 <- table(subset(data3way, u == 1)[, 1], subset(data3way, u == 1)[, 2])
+```
+
+
+```{r}
+mat.u0
+```
+
+```{r}
+idx.v1 <- data3way$v == 1
+idx.w1 <- data3way$w == 1
+idx.u1 <- data3way$u == 1
+sum(idx.v1 * idx.w1 * idx.u1) # element (1,1) of mat.u1
+```
+
+```{r}
+idx.v2 <- data3way$v == 2
+sum(idx.v2 * idx.w1 * idx.u1) # element (1,2) of mat.u1
+```
+
+```{r}
+colnames(mat.u1) <- colnames(mat.u0) <- c("v1", "v2", "v3")
+rownames(mat.u1) <- rownames(mat.u0) <- c("w1", "w2", "w3")
+
+data3way.array <-
+  array(rep(NA, 18),
+        dim = c(3, 3, 2),
+        dimnames = list(
+          paste("w", 1:3, sep = ""),
+          paste("v", 1:3, sep =
+                  ""),
+          paste("u", 0:1, sep =
+                  "")
+        ))
+
+data3way.array[, , 1] <- mat.u0
+data3way.array[, , 2] <- mat.u1
+data3way.array
+```
+
+```{r}
+N <- sum(data3way.array)
+(data3way.array.p <- data3way.array / N)
+```
+
+## 1.2 Marginal Distributions
+Create marginal distribution for `u` as vector `uMarginal`.
+```{r}
+(uMarginal <- apply(data3way.array.p, 3, sum))
+```
+
+Create marginal distribution for `v` as vector `vMarginal`.
+```{r}
+(vMarginal <- apply(data3way.array.p, 2, sum))
+vMarginal["v1"]
+```
+
+Create marginal distribution for `w` as vector `wMarginal`.
+```{r}
+(wMarginal <- apply(data3way.array.p, 1, sum))
+wMarginal["w1"]
+```
+
+## 1.3 Conditional Distributions
+Create conditional distribution $p(w,v|u=1)$ as matrix `cond.v.w.given.u1`.
+```{r}
+cond.v.w.given.u1 <- data3way.array.p[, , "u1"] / sum(data3way.array.p[, , "u1"])
+cond.v.w.given.u1["w1", ]
+sum(cond.v.w.given.u1) # check
+```
+
+Create conditional distribution $p(v|u=1)$ as vector `cond.v.given.u1`.
+```{r}
+cond.v.given.u1 <- apply(data3way.array.p[, , "u1"], 2, sum) / sum(data3way.array.p[, , "u1"])
+cond.v.given.u1["v1"]
+sum(cond.v.given.u1) # check
+```
+
+Create conditional distribution $p(w|v=2,u=1)$ as vector `cond.w.given.u1.v2`.
+```{r}
+cond.w.given.u1.v2 <- data3way.array.p[, "v2", "u1"] / sum(data3way.array.p[, "v2", "u1"])
+cond.w.given.u1.v2["w1"]
+sum(cond.w.given.u1.v2) # check
+```
+
+Compare the vectors $p(w|v2,u1)p(v2|u1)p(u1)$ and $p(w,v,u)[,v2,u1]$
+```{r}
+rbind(uMarginal["u1"]*cond.v.given.u1["v2"]*cond.w.given.u1.v2,data3way.array.p[,"v2","u1"])
+```
+
+# 2 Simulation Using Conditional Distributions
+Let the marginal distribution for random variable `u` be Bernoulli with $p(u=0)=0.55$, $p(u=1)=0.45$.
+Let conditional distributions for random variables $(v|u=0)$ and $(v|u=1)$, taking values 1, 2, 3 be
+```{r}
+(pCond.v.given.u0 <- c(.7, .2, .1))
+(pCond.v.given.u1 <- c(.1,.2,.7))
+```
+
+Let random variable $(w|v,u)$ take values $1,2,3$ with probabilities $p(w|v,u)$, given by the following:
+```{r}
+p.given.u0.v1 <- c(.3, .3, .4)
+p.given.u0.v2 <- c(.5, .3, .2)
+p.given.u0.v3 <- c(.6, .2, .2)
+p.given.u1.v1 <- c(.2, .3, .5)
+p.given.u1.v2 <- c(.2, .2, .6)
+p.given.u1.v3 <- c(.1, .7, .2)
+```
+
+Simulate joint sample $(w,v,u)$ of lenth $n=500$.
+Use `set.seed(11)` Start with simulation of u.
+For each simulated value `u` generate `v` from the corresponding conditional distribution $p(v|u)$.
+Finally, for each pair $v,u$ simulate `w` from $p(w|v,u)$.
+```{r}
+v_probs <- function(u) {
+  switch(u + 1, 
+         pCond.v.given.u0,
+         pCond.v.given.u1)
+}
+
+w_probs <- function(u, v) {
+  switch(u + 1,
+         switch(v,
+                p.given.u0.v1,
+                p.given.u0.v2,
+                p.given.u0.v3),
+         switch(v,
+                p.given.u1.v1,
+                p.given.u1.v2,
+                p.given.u1.v3)
+         )
+}
+
+set.seed(11)
+sim.u <- rbinom(500, 1, prob = .45)
+sim.v <- map_dbl(map(sim.u, ~ v_probs(.x)), ~ sample(1:3, 1, replace = TRUE, prob = .x))
+sim.w <- map_dbl(map2(sim.u, sim.v, ~ w_probs(.x, .y)), ~ sample(1:3, 1, replace = TRUE, prob = .x))
+
+head(cbind(sim.w, sim.v, sim.u), 25)
+```
+
+# 3 Conditional Expected Values
+Calculate unconditional expected value $E[v]$. Random variable `v` can take values $1,2,3$ with corresponding probabilities.
+```{r}
+vMarginal
+```
+
+Then the unconditional mean value is
+```{r}
+c(1, 2, 3) %*% vMarginal
+```
+
+Calculate conditional expected value $E[v|u]$.
+
+First, find conditional mean values $E[v|u=u0]=E[v|u0]$ and $E[v|u=u1]=E[v|u1]$.
+
+The random variable $(v|u0)$ takes values $1,2,3$ with corresponding probabilities $p(v=1|u0)$, $p(v=2|u0)$, $p(v=3|u0)$, given by the vector.
+```{r}
+(cond.v.given.u0 <- apply(data3way.array.p[, , "u0"], 2, sum) / uMarginal["u0"])
+```
+
+Taking conditional expected value with respect to this distribution $E[v|u0]$ is:
+```{r}
+(exp.v.given.u0 <- c(1, 2, 3) %*% cond.v.given.u0)
+```
+
+The random variable $(v|u1)$ takes the same values $1,2,3$, but with different probabilities $p(v|u1)$:
+```{r}
+cond.v.given.u1
+```
+
+Thus conditional expected value $E[v|u1]$ is
+```{r}
+(exp.v.given.u1 <- c(1, 2, 3) %*% cond.v.given.u1)
+```
+
+Note that the conditional expected value $E[v|u]$ takes two different values: $E[v|u0]$ and $E[v|u1]$ with probabilities $p(v|u0)$ and $p(v|u1)$, correspondingly.
+
+This means that $E[v|u]$ is a random variable and its (unconditional) expected value is $$E[v|u]=E[v|u0]p(u=u0)+E[v|u1]p(u=u1)$$ 
+
+Calculate this unconditional expected value:
+```{r}
+(uncond.exp.v.given.u <-
+   exp.v.given.u0 * uMarginal["u0"] + exp.v.given.u1 * uMarginal["u1"])
+```
+
+
+
+
+

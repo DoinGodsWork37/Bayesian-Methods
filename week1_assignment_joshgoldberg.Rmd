@@ -1,0 +1,218 @@
+---
+title: "Week 1 Assignment: Study on Smokers"
+author: "Josh Goldberg"
+date: "`r format(Sys.time(), '%B, %d %Y')`"
+always_allow_html: yes
+output:
+  github_document: 
+  pdf_document: default
+editor_options: 
+  chunk_output_type: inline
+---
+
+```{r Global-options, include=FALSE}
+knitr::opts_chunk$set(fig.width=6, fig.height=4, fig.path='Figs/',
+                      warning=FALSE, message=FALSE, cache=TRUE)
+```
+
+```{r Preamble, echo=FALSE}
+# Enter package in p_load()
+# If package is not installed, p_load() will install and load the package
+if(!"pacman" %in% rownames(installed.packages())) {
+  install.packages("pacman")
+  }
+pacman::p_load(tidyverse, ggthemes, here, faraway, janitor)
+
+# Set default ggplot theme to tufte
+theme_set(ggthemes::theme_tufte())
+```
+
+```{r Copy-files, echo=FALSE, eval=FALSE}
+# Enter files to load to project directory in from = "~/Downloads/your_file_name_here"
+file.copy(from = "~/Downloads/", to = here::here(), 
+          overwrite = TRUE, recursive = FALSE, 
+          copy.mode = TRUE)
+```
+
+**This project helps understanding conditional distributions**
+
+The following data set is in `library(faraway)`.
+In it participating women are categorized into groups of smokers or not, 7 age groups and groups of dead or alive after 20 years of study.
+```{r Data}
+data(femsmoke)
+femsmoke
+```
+
+# 1 Joint distribution
+Create joint distribution of 3 variables:
+
+    * v - "smoker yes"=1 or "smoker no"=0
+    * u - "dead yes"=1 or "dead no"=0
+    * w - age category
+
+$w=1$: 18-24
+$w=2$: 25-34
+$w=3$: 35-44
+$w=4$: 45-54
+$w=5$: 55-64
+$w=6$: 65-74
+$w=7$: 75+
+
+```{r Functions}
+make_array <- function() {
+  array(rep(NA, 28),
+        dim = c(length(unique(femsmoke$smoker)), length(unique(femsmoke$age)), 2),
+        dimnames = list(
+          paste("smoker", c("yes", "no"), sep = "."),
+          paste("age", 1:7, sep = "."),
+          paste("dead", c("yes", "no"), sep = ".")
+        ))
+}
+
+make_counts <- function(x, count_col = y, df = femsmoke) {
+  x <- enquo(x)
+  count_col <- enquo(count_col)
+  map2(
+      df %>% pull(!! count_col),
+      df %>% pull(!! x),
+      ~ replicate(n = .x, .y)
+    ) %>% 
+    unlist()
+}
+```
+
+```{r Joint-probs-1}
+dead_yes <- matrix(NA, nrow = length(unique(femsmoke$smoker)), ncol = length(unique(femsmoke$age)))
+dead_no <- matrix(NA, nrow = length(unique(femsmoke$smoker)), ncol = length(unique(femsmoke$age)))
+
+colnames(dead_yes) <- colnames(dead_no) <- unique(femsmoke$age)
+rownames(dead_yes) <- rownames(dead_no) <- unique(femsmoke$smoker)
+
+w <- unique(femsmoke$age)
+v <- unique(femsmoke$smoker)
+u <- unique(femsmoke$dead)
+
+pwalk(list(
+  row = match(femsmoke$smoker, v),
+  col = match(femsmoke$age, w),
+  y = femsmoke$y,
+  dead = femsmoke$dead
+), function(row, col, y, dead) {
+  switch(dead,
+         yes = dead_yes[row, col] <<- y,
+         no = dead_no[row, col] <<- y)
+})
+
+femsmoke_array <- make_array()
+
+femsmoke_array[, , 1] <- dead_yes
+femsmoke_array[, , 2] <- dead_no
+
+total_count <- sum(femsmoke_array)
+
+(femsmoke_joint_p <- femsmoke_array / total_count)
+sum(femsmoke_joint_p)
+```
+
+```{r Joint-probs-2}
+new_femsmoke <- tibble(age = make_counts(age),
+                       dead = make_counts(dead),
+                       smoker = make_counts(smoker))
+
+femsmoke_mod_u1 <- t(table(new_femsmoke %>% filter(dead == "yes") %>% pull(age), 
+                         new_femsmoke %>% filter(dead == "yes") %>% pull(smoker)))
+
+femsmoke_mod_u0 <- t(table(new_femsmoke %>% filter(dead == "no") %>% pull(age), 
+                         new_femsmoke %>% filter(dead == "no") %>% pull(smoker)))
+
+femsmoke_array <- make_array()
+
+femsmoke_array[, , 1] <- femsmoke_mod_u1
+femsmoke_array[, , 2] <- femsmoke_mod_u0
+
+total_count <- sum(femsmoke_array)
+
+(femsmoke_joint_p <- femsmoke_array / total_count)
+sum(femsmoke_joint_p)
+```
+
+```{r Joint-probs-3}
+femsmoke_joint_p_xtabs <- xtabs(y ~ smoker + age + dead, data = femsmoke) / sum(femsmoke$y)
+sum(femsmoke_joint_p_xtabs)
+```
+
+# 2 Marginal distributions
+Create marginal distribution for *u* (dead).
+```{r Marginal-u}
+(uMarginal_dead <- apply(femsmoke_joint_p, 3, sum))
+sum(uMarginal_dead)
+```
+
+Create marginal distribution for *v* (smoke).
+```{r Marginal-v}
+(vMarginal_smoke <- apply(femsmoke_joint_p, 1, sum))
+sum(vMarginal_smoke)
+```
+
+Create marginal distribution for *w* (age).
+```{r Marginal-u}
+(wMarginal_age <- apply(femsmoke_joint_p, 2, sum))
+sum(wMarginal_age)
+```
+
+# 3 Conditional distributions
+Create conditional distribution $p(w,v|u="alive")=p(smoke,age|alive)$.
+```{r Conditional-smoke-age-cond-alive}
+(cond_v_w_given_uAlive <- femsmoke_joint_p[, , "dead.no"] / uMarginal_dead["dead.no"])
+sum(cond_v_w_given_uAlive)
+```
+
+Create conditional distribution $p(v|u="alive")=p(smoke|alive)$.
+```{r Conditional-smoke-cond-alive}
+(cond_v_given_uAlive <- apply(femsmoke_joint_p[, , "dead.no"], 1, sum) / uMarginal_dead["dead.no"])
+sum(cond_v_given_uAlive)
+```
+
+Create conditional distribution $p(w|u="alive",v="smoker")=p(age|alive,smoke)$.
+```{r Conditional-age-cond-alive-smoke}
+(cond_w_given_uAlive_vSmoke <- t(femsmoke_joint_p[, 1:7, "dead.no"])[, 1] / sum(t(femsmoke_joint_p[, 1:7, "dead.no"])[, 1]))
+
+sum(cond_w_given_uAlive_vSmoke)
+```
+
+Compare the vectors $p(w|v2,u1)p(v2|u1)p(u1) and p(w,v,u)[,v2,u1]$.
+```{r Compare-vectors}
+rbind(
+  uMarginal_dead["dead.no"] * cond_v_given_uAlive["smoker.yes"] * cond_w_given_uAlive_vSmoke,
+  t(femsmoke_joint_p[, 1:7, "dead.no"])[, 1]
+)
+```
+
+# 4 Simulation
+Let the marginal distribution for age group be $p(age)=p(w)$ estimated marginal distribution from the sample:
+```{r Marginal-sample}
+wMarginal_age
+```
+
+Given simulated age group, simulate variable `v = smoke` using conditional distribution $p(v|w)$, i.e. using probabilities $p(smoke.yes|age)$, $p(smoke.no|age)$.
+
+Given simulated variables `w` for age and `v` for smoke, simulate mortality variable `u` using distribution $p(dead|v,w), p(alive|v,w)$.
+
+Using the described procedure simulate outcomes for 100 participants.
+Use seed `set.seed(284)` for reproducibility.
+```{r Simulation}
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
