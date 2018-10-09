@@ -2,12 +2,14 @@
 title: "Week 1 Assignment: Study on Smokers"
 author: "Josh Goldberg"
 date: "`r format(Sys.time(), '%B, %d %Y')`"
-always_allow_html: yes
 output:
-  github_document: 
+  html_document:
+    df_print: paged
+  github_document: null
   pdf_document: default
-editor_options: 
+editor_options:
   chunk_output_type: inline
+always_allow_html: yes
 ---
 
 ```{r Global-options, include=FALSE}
@@ -51,11 +53,17 @@ Create joint distribution of 3 variables:
     * w - age category
 
 $w=1$: 18-24
+
 $w=2$: 25-34
+
 $w=3$: 35-44
+
 $w=4$: 45-54
+
 $w=5$: 55-64
+
 $w=6$: 65-74
+
 $w=7$: 75+
 
 ```{r Functions}
@@ -105,8 +113,8 @@ pwalk(list(
 
 femsmoke_array <- make_array()
 
-femsmoke_array[, , 1] <- dead_yes
-femsmoke_array[, , 2] <- dead_no
+femsmoke_array[, , "dead.yes"] <- dead_yes
+femsmoke_array[, , "dead.no"] <- dead_no
 
 total_count <- sum(femsmoke_array)
 
@@ -127,8 +135,8 @@ femsmoke_mod_u0 <- t(table(new_femsmoke %>% filter(dead == "no") %>% pull(age),
 
 femsmoke_array <- make_array()
 
-femsmoke_array[, , 1] <- femsmoke_mod_u1
-femsmoke_array[, , 2] <- femsmoke_mod_u0
+femsmoke_array[, , "dead.yes"] <- femsmoke_mod_u1
+femsmoke_array[, , "dead.no"] <- femsmoke_mod_u0
 
 total_count <- sum(femsmoke_array)
 
@@ -155,7 +163,7 @@ sum(vMarginal_smoke)
 ```
 
 Create marginal distribution for *w* (age).
-```{r Marginal-u}
+```{r Marginal-w}
 (wMarginal_age <- apply(femsmoke_joint_p, 2, sum))
 sum(wMarginal_age)
 ```
@@ -175,7 +183,7 @@ sum(cond_v_given_uAlive)
 
 Create conditional distribution $p(w|u="alive",v="smoker")=p(age|alive,smoke)$.
 ```{r Conditional-age-cond-alive-smoke}
-(cond_w_given_uAlive_vSmoke <- t(femsmoke_joint_p[, 1:7, "dead.no"])[, 1] / sum(t(femsmoke_joint_p[, 1:7, "dead.no"])[, 1]))
+(cond_w_given_uAlive_vSmoke <- femsmoke_joint_p["smoker.yes", , "dead.no"] / sum(femsmoke_joint_p["smoker.yes", , "dead.no"]))
 
 sum(cond_w_given_uAlive_vSmoke)
 ```
@@ -196,23 +204,61 @@ wMarginal_age
 
 Given simulated age group, simulate variable `v = smoke` using conditional distribution $p(v|w)$, i.e. using probabilities $p(smoke.yes|age)$, $p(smoke.no|age)$.
 
-Given simulated variables `w` for age and `v` for smoke, simulate mortality variable `u` using distribution $p(dead|v,w), p(alive|v,w)$.
+Given simulated variables `w` for age and `v` for smoke, simulate mortality variable `u` using distribution $p(dead|v,w)$, $p(alive|v,w)$.
 
 Using the described procedure simulate outcomes for 100 participants.
 Use seed `set.seed(284)` for reproducibility.
-```{r Simulation}
+```{r Simulate-1}
+set.seed(284)
+sim_age <- sample(1:7, 100, replace = TRUE, prob = wMarginal_age)
 
+smokers <- apply(femsmoke_joint_p["smoker.yes", , ], 1, sum) / wMarginal_age
+non_smokers <- apply(femsmoke_joint_p["smoker.no", , ], 1, sum) / wMarginal_age
+
+conditional_smoke_age <- rbind(smoker.yes = smokers, smoker.no = non_smokers)
+
+sim_smoke <- map_dbl(sim_age, ~ sample(0:1, 1, replace = TRUE, prob = c(non_smokers[.x], smokers[.x])))
+
+smokers_mort <- femsmoke_joint_p["smoker.yes", , ] / (conditional_smoke_age["smoker.yes", ] * wMarginal_age)
+non_smokers_mort <- femsmoke_joint_p["smoker.no", , ] / (conditional_smoke_age["smoker.no", ] * wMarginal_age)
+
+sim_dead <- pmap_dbl(list(sim_age, sim_smoke), ~ sample(1:0, 1, replace = TRUE, 
+                                          prob = switch(.y + 1,
+                                                        non_smokers_mort[.x, ],
+                                                        smokers_mort[.x, ])))
+
+attempt <- bind_cols(ages = sim_age, smokers = sim_smoke, dead = sim_dead) %>% 
+  head(25)
+
+answer <- tribble(
+  ~ages, ~smokers, ~dead,
+    3,       0,      0,
+    6,       0,      0,
+    3,       0,      0,
+    3,       0,      0,
+    4,       1,      0,
+    2,       1,      0,
+    7,       0,      1,
+    5,       0,      0,
+    5,       1,      1,
+    5,       1,      0,
+    5,       1,      1,
+    3,       1,      0,
+    2,       0,      0,
+    7,       1,      1,
+    3,       0,      0,
+    1,       0,      0,
+    6,       0,      1,
+    2,       0,      0,
+    5,       1,      0,
+    2,       0,      0,
+    4,       0,      0,
+    7,       1,      1,
+    3,       1,      0,
+    3,       0,      0,
+    1,       0,      0,
+)
+
+map2(attempt, answer, ~ which(.x != .y))
 ```
-
-
-
-
-
-
-
-
-
-
-
-
 

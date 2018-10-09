@@ -1,0 +1,106 @@
+---
+title: "Workshop 2"
+author: "Joshua Goldberg"
+date: "`r format(Sys.time(), '%B, %d %Y')`"
+always_allow_html: yes
+output:
+  github_document: 
+  pdf_document: default
+editor_options: 
+  chunk_output_type: inline
+---
+
+```{r Global-options, include=FALSE}
+knitr::opts_chunk$set(fig.width=6, fig.height=4, fig.path='Figs/',
+                      warning=FALSE, message=FALSE, cache=TRUE)
+```
+
+```{r Preamble, echo=FALSE}
+# Enter package in p_load()
+# If package is not installed, p_load() will install and load the package
+if(!"pacman" %in% rownames(installed.packages())) {
+  install.packages("pacman")
+  }
+pacman::p_load(tidyverse, ggthemes, here)
+
+# Set default ggplot theme to tufte
+theme_set(ggthemes::theme_tufte())
+source("documents-MScA Bayesian Methods (32014)-KruschkeCode-DBDA2E-utilities.R")
+source("documents-MScA Bayesian Methods (32014)-KruschkeCode-BernBeta.R")
+```
+
+```{r Copy-files, echo=FALSE, eval=FALSE}
+# Enter files to load to project directory in from = "~/Downloads/your_file_name_here"
+file.copy(from = "~/Downloads/documents-MScA Bayesian Methods (32014)-KruschkeCode-BernBeta.R", to = here::here(), 
+          overwrite = TRUE, recursive = FALSE, 
+          copy.mode = TRUE)
+```
+
+# 3 Example: Mammography Screening Controvercy
+## 3.1 Problem
+According to CDC, probability of breast cancer among women of age 50-60 years old is 2.28%.
+Screening using mammography has sensitivity (i.e. probability of detecting the disease correctly) 75%-94%. Specificity of the test (i.e. probability of correct "no disease" conclusion) is 83%-98%. Assume the most optimistic parameters of the test (94% and 98%, correspondingly for sensitivity and specificity) What is the probability that randomly selected woman with positive test result has the disease?
+```{r}
+# Prior p(theta1)
+p.theta1 <- .0228
+# Sensitivity: p(tau1|theta1)
+p.tau1.theta1 <- .94
+# Specificity: p(tau0|theta0)
+p.tau0.theta0 <- .98
+# Complimentary probabilities
+p.theta0 <- 1 - p.theta1
+p.tau1.theta0 <- 1 - p.tau0.theta0
+# Bayes
+(p.theta1.tau1 <- p.tau1.theta1 * p.theta1 / (p.tau1.theta1 * p.theta1 + p.tau1.theta0 * p.theta0))
+```
+
+Assume that randomly selected woman tested positive and then retested with negative test result.
+After both tests what is the probability of disease?
+```{r}
+# Set the prior to the new probability of having the disease:
+pDisease <- p.theta1.tau1
+# Bayes rule for second, negative test:
+(p.theta1.tau0 <- ((1.0 - p.tau1.theta1) * pDisease / + ((1.0 - p.tau1.theta1) * pDisease + (1.0 - p.tau1.theta0) * (1.0 - pDisease))))
+```
+
+# 4 Example of Using Bayes Theorem in Statistics
+```{r}
+(Theta <- seq(0 , 1 , length = 5))  # Sparse teeth for Theta.
+
+pTheta <- pmin( Theta , 1-Theta ) # Triangular shape for pTheta.
+(pTheta <- pTheta/sum(pTheta)) # Make pTheta sum to 1.0
+Data  <- c(rep(0, 0), rep(1, 1))      # Single flip with 1 head
+```
+
+## 4.1 Binomial model, triangular prior with 3 values
+
+## 4.2 Binomial model, triangular prior with 11 values
+
+## 4.3 Binomial model, uniform prior with 1001 values
+```{r}
+Theta <- seq( 0 , 1 , length = 1001 ) # fine grid for Theta.
+pTheta <- rep(1,length(Theta))      # Uniform (horizontal) shape for pTheta.
+pTheta <- pTheta/sum(pTheta)        # Make pTheta sum to 1.0
+Data <- c(rep(0,0),rep(1,1))        # Single flip with 1 head
+```
+
+```{r}
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

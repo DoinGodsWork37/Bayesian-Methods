@@ -71,12 +71,12 @@ mat.u0
 idx.v1 <- data3way$v == 1
 idx.w1 <- data3way$w == 1
 idx.u1 <- data3way$u == 1
-sum(idx.v1 * idx.w1 * idx.u1) # element (1,1) of mat.u1
+sum(idx.v1 * idx.w1 * idx.u1) # element (1, 1) of mat.u1
 ```
 
 ```{r}
 idx.v2 <- data3way$v == 2
-sum(idx.v2 * idx.w1 * idx.u1) # element (1,2) of mat.u1
+sum(idx.v2 * idx.w1 * idx.u1) # element (1, 2) of mat.u1
 ```
 
 ```{r}
