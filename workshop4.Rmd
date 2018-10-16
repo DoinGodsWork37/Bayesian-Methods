@@ -1,0 +1,518 @@
+---
+title: "Untitled"
+author: "Your Name"
+date: "`r format(Sys.time(), '%B, %d %Y')`"
+always_allow_html: yes
+output:
+  github_document: 
+  pdf_document: default
+editor_options: 
+  chunk_output_type: inline
+---
+
+```{r Global-options, include=FALSE}
+knitr::opts_chunk$set(fig.width=6, fig.height=4, fig.path='Figs/',
+                      warning=FALSE, message=FALSE, cache=TRUE)
+```
+
+```{r Preamble, echo=FALSE}
+# Enter package in p_load()
+# If package is not installed, p_load() will install and load the package
+if(!"pacman" %in% rownames(installed.packages())) {
+  install.packages("pacman")
+  }
+pacman::p_load(tidyverse, ggthemes, here, purrr)
+
+# Set default ggplot theme to tufte
+theme_set(ggthemes::theme_tufte())
+```
+
+```{r Copy-files, echo=FALSE, eval=FALSE}
+# Enter files to load to project directory in from = "~/Downloads/your_file_name_here"
+file.copy(from = "~/Downloads/documents-MScA Bayesian Methods (32014)-MScA 32014 Lecture 4 New-2GroupsStudy.csv", to = here::here(), 
+          overwrite = TRUE, recursive = FALSE, 
+          copy.mode = TRUE)
+```
+
+# 3 Metropolis Algorithm
+Create a function that makes decision for one step of Metropolis random walk based on the initial state and vector of probabilities.
+Set vector of probabilities, for example:
+```{r}
+probabilities <- c(state1 = .1, state2 = .3, state3 = .5, state4 = .05, state5 = .05)
+sum(probabilities)
+```
+
+```{r}
+metropolis <- function(probs) {
+  i <- sample(1:length(probs), size = 1)
+  
+  if (i == length(probs)) {
+    left <- probs[i - 1]
+    right <- probs[1]
+  }
+  
+  else if (i == 1) {
+    left <- probs[length(probs)]
+    right <- probs[i + 1]
+  } else {
+    left <- probs[i - 1]
+    right <- probs[i + 1]
+  }
+  
+  jump <- sample(c(left, right), size = 1, prob = c(.5, .5))
+  
+  if (jump < probs[i]) {
+    sample(c(left, probs[i]), size = 1, prob = c(.5, .5))
+  } else {
+    jump
+  }
+}
+
+
+dat <- replicate(metropolis(probabilities), n = 100000)
+
+dat %>% names() %>% janitor::tabyl()
+```
+
+# 4 Using JAGS to Estimate Binomial Probability
+## 4.1 Data
+```{r}
+suppressWarnings(source("DBDA2Eprograms/DBDA2E-utilities.R"))
+```
+
+```{r}
+myData <- read.csv("DBDA2Eprograms/z15N50.csv")
+head(myData)
+```
+
+```{r}
+y <- myData$y
+(Ntotal <- length(y))
+```
+
+```{r}
+(dataList <- list(y = y, Ntotal = Ntotal))
+```
+
+# 4.2 Preparation of the model for JAGS
+```{r}
+modelString = "
+model {
+  for (i in 1:Ntotal) {
+    y[i]~dbern(theta)
+  }
+  theta~dbeta(1,1)
+}
+"
+```
+
+```{r}
+writeLines(modelString, con = "Tempmodel.txt")
+```
+
+```{r}
+
+```
+
+## 4.3 Initializing Markov chains
+```{r}
+MLE <- sum(y) / Ntotal
+init1 <- MLE
+init2 <- MLE * (1 + .01)
+init3 <- MLE * (1 - .01)
+initsList <- function() {
+  thetaInit <- sample(c(init1, init2, init3), 1, replace = T)
+  return(list(theta = thetaInit))
+}
+initsList()
+```
+
+## 4.4 Sending information to JAGS
+```{r}
+library(rjags)
+#' `n.chains` is the number of directions the model can go
+jagsModel <-
+  jags.model(
+    file = "TempModel.txt",
+    data = dataList,
+    n.chains = 3,
+    n.adapt = 500
+  )
+```
+
+```{r}
+names(jagsModel)
+```
+
+## 4.5 Running MCMC on JAGS: burn in and main run
+Now run JAGS chains for 600 steps to complete burn in, i.e. transition to a stable distribution of Markov chain.
+```{r}
+update(jagsModel, n.iter = 600)
+```
+
+```{r}
+codaSamples <- coda.samples(jagsModel,
+               variable.names = c("theta"),
+               n.iter = 3334)
+
+list.samplers(jagsModel)
+```
+
+```{r}
+head(codaSamples)
+```
+
+## 4.6 Analyzing the results
+```{r}
+summary(codaSamples)
+```
+
+```{r}
+coda::traceplot(codaSamples)
+```
+
+```{r}
+densplot(codaSamples)
+```
+
+```{r}
+plot(codaSamples)
+```
+
+```{r}
+autocorr.plot(codaSamples, ask = F)
+```
+
+```{r}
+effectiveSize(codaSamples)
+```
+
+```{r}
+gelman.diag(codaSamples)
+```
+
+Measure difference within chain and between chains (similar to ANOVA).
+```{r}
+gelman.plot(codaSamples)
+```
+
+Point estimate.
+```{r}
+lapply(codaSamples, mean)
+```
+
+MLE estimate. They agree.
+```{r}
+sum(y) / Ntotal
+```
+
+```{r}
+(l <- min(unlist(codaSamples)) - .05)
+(h <- max(unlist(codaSamples)) + .05)
+histBreaks <- seq(l, h, by = .05)
+postHist <- lapply(codaSamples, hist, breaks = histBreaks)
+```
+
+```{r}
+plot(
+  postHist[[1]]$mids,
+  postHist[[1]]$density,
+  type = "l",
+  col = "black",
+  lwd = 2,
+  ylim = c(0, 6),
+  ylab = "Distribution Density",
+  xlab = "Theta"
+)
+lines(
+  postHist[[2]]$mids,
+  postHist[[2]]$density,
+  type = "l",
+  col = "red",
+  lwd = 2
+)
+lines(
+  postHist[[3]]$mids,
+  postHist[[3]]$density,
+  type = "l",
+  col = "blue",
+  lwd = 2
+)
+lines(
+  postHist[[3]]$mids,
+  dbeta(postHist[[3]]$mids, 1 + sum(y), Ntotal - sum(y) + 1),
+  type = "l",
+  col = "green",
+  lwd = 3
+)
+legend(
+  "topright",
+  legend = c("Chain1", "Chain2", "Chain3", "Theoretical"),
+  col = c("black", "red", "blue", "green"),
+  lwd = 2
+)
+```
+
+# 5 Comparison of two binomial distributions
+Consider a more realistic model now: two groups of patients are selected and given two treatments, one of which is a placebo.
+
+## 5.1 Data
+```{r}
+myData <- read.csv("documents-MScA Bayesian Methods (32014)-MScA 32014 Lecture 4 New-2GroupsStudy.csv")
+(y = myData$y)
+```
+
+```{r}
+(s <- as.numeric(myData$s))
+(Ntotal <- length(y))
+(Nsubj <- length(unique(s)))
+(dataList <- list(
+  y = y,
+  s = s,
+  Ntotal = Ntotal,
+  Nsubj = Nsubj
+))
+```
+
+## 5.2 Different group proportions, common prior
+### 5.2.1 Model preparation
+Prepare the model string. It will be saved in the work directory.
+
+```{r}
+# 2, 2 is not a strong prior; note theta has a length of 2
+modelString = "
+  model {
+    for ( i in 1:Ntotal ) {
+      y[i] ~ dbern( theta[s[i]] )
+    }
+    for ( sIdx in 1:Nsubj ) {      # Different thetas from same prior
+      theta[sIdx] ~ dbeta( 2 , 2 ) # N.B.: 2,2 prior; change as appropriate.
+    }
+  }
+  " # close quote for modelString
+
+writeLines(modelString , con = "TEMPmodel.txt")
+```
+
+### 5.2.2 Initialization and sending the model to JAGS
+```{r}
+initsList = function() {
+  thetaInit = rep(0, Nsubj)
+  for (sIdx in 1:Nsubj) {
+    # for each subject
+    includeRows = (s == sIdx) # identify rows of this group
+    yThisSubj = y[includeRows]  # extract data of this group
+    resampledY = sample(yThisSubj , replace = TRUE) # resample
+    thetaInit[sIdx] = sum(resampledY) / length(resampledY)
+  }
+  thetaInit = 0.001 + 0.998 * thetaInit # keep away from 0,1
+  return(list(theta = thetaInit))
+}
+```
+
+```{r}
+initsList()
+```
+
+```{r}
+parameters = c("theta")     # The parameters to be monitored
+adaptSteps = 500             # Number of steps to adapt the samplers
+burnInSteps = 500            # Number of steps to burn-in the chains
+nChains = 3                  # nChains should be 2 or more for diagnostics
+numSavedSteps <- 50000
+nIter = ceiling(numSavedSteps / nChains)
+
+# Create, initialize, and adapt the model:
+jagsModel = jags.model(
+  "TEMPmodel.txt" ,
+  data = dataList ,
+  inits = initsList ,
+  n.chains = nChains ,
+  n.adapt = adaptSteps
+)
+```
+
+### 5.2.3 Running the model
+Run burn in.
+```{r}
+update(jagsModel , n.iter = burnInSteps)
+```
+
+```{r}
+codaSamples = coda.samples(jagsModel , variable.names = parameters , n.iter =
+                             nIter)
+head(codaSamples)
+```
+
+```{r}
+list.samplers(jagsModel)
+```
+
+### 5.2.4 Analysis
+```{r}
+summary(codaSamples)
+```
+
+```{r}
+plot(codaSamples)
+```
+
+```{r}
+autocorr.plot(codaSamples, ask = F)
+```
+
+```{r}
+effectiveSize(codaSamples)
+```
+
+```{r}
+gelman.diag(codaSamples)
+```
+
+```{r}
+gelman.plot(codaSamples)
+```
+
+```{r}
+matrix(unlist(lapply(codaSamples, function(z)
+  apply(z, 2, mean))), ncol = 3)
+```
+
+```{r}
+plot(density(codaSamples[[1]][, 1]),
+     xlim = c(0, 1),
+     ylim = c(0, 3))
+lines(density(codaSamples[[1]][, 2]))
+lines(density(codaSamples[[2]][, 1]), col = "orange")
+lines(density(codaSamples[[2]][, 2]), col = "orange")
+lines(density(codaSamples[[3]][, 1]), col = "blue")
+lines(density(codaSamples[[3]][, 2]), col = "blue")
+```
+
+Calculate high density intervals (HDIs) for each chain.
+```{r}
+(HDIofChainsHierarchi <-
+   lapply(codaSamples, function(z)
+     cbind(
+       Theta1 = HDIofMCMC(codaSamples[[1]][, 1]),
+       Theta2 = HDIofMCMC(codaSamples[[1]][, 2])
+     )))
+```
+
+Find differences between $\theta1$ and $\theta2$.
+```{r}
+chainDiffs <- lapply(codaSamples, function(z)
+  z[, 2] - z[, 1])
+```
+
+Find left 95% HDI boundaries for the chain differences and plot them.
+```{r}
+(leftBounds <-
+   unlist(lapply(chainDiffs, function(z)
+     HDIofMCMC(z, .95)[1])))
+```
+
+```{r}
+head(chainDiffs[[1]])
+```
+
+Zero is included, so we cannot include difference between chains. HDIs is the shortest interval that contains 95% of the mass. Same distribution of prior will allow shrinkage. Use different priors for *no shrinkage*. Amount of shrinkage will depend on the strength of the prior.
+```{r}
+plot(
+  density(chainDiffs[[1]]),
+  xlim = c(-.5, 1),
+  ylim = c(0, 3),
+  col = "black"
+)
+
+lines(density(chainDiffs[[2]]), col = "red")
+lines(density(chainDiffs[[3]]), col = "blue")
+abline(v = leftBounds, col = c("black", "orange", "blue"))
+```
+
+## 5.3 Separate group models
+```{r}
+myDataControl <- myData %>% 
+  filter(s == "Control")
+
+(dataListC <- list(y = myDataControl$y, Ntotal = sum(myDataControl$y)))
+
+myDataTreatment <- myData %>% 
+  filter(s == "Treat")
+```
+
+```{r}
+modelString = "
+model {
+  for (i in 1:Ntotal) {
+    y[i]~dbern(theta)
+  }
+  theta~dbeta(1,1)
+}
+"
+```
+
+```{r}
+writeLines(modelString, con = "separate_groups.txt")
+```
+
+Initializing Markov chains
+```{r}
+MLE <- sum(y) / Ntotal
+init1 <- MLE
+init2 <- MLE * (1 + .01)
+init3 <- MLE * (1 - .01)
+initsList <- function() {
+  thetaInit <- sample(c(init1, init2, init3), 1, replace = T)
+  return(list(theta = thetaInit))
+}
+initsList()
+```
+
+Sending information to JAGS
+```{r}
+library(rjags)
+#' `n.chains` is the number of directions the model can go
+jagsModelControl <-
+  jags.model(
+    file = "separate_groups.txt",
+    data = myDataControl,
+    n.chains = 3,
+    n.adapt = 500
+  )
+
+jagsModelTreat <-
+  jags.model(
+    file = "separate_groups.txt",
+    data = myDataTreatment,
+    n.chains = 3,
+    n.adapt = 500
+  )
+```
+
+```{r}
+names(jagsModel)
+```
+
+## 4.5 Running MCMC on JAGS: burn in and main run
+Now run JAGS chains for 600 steps to complete burn in, i.e. transition to a stable distribution of Markov chain.
+```{r}
+update(jagsModel, n.iter = 600)
+```
+
+```{r}
+codaSamples <- coda.samples(jagsModel,
+               variable.names = c("theta"),
+               n.iter = 3334)
+
+list.samplers(jagsModel)
+```
+
+```{r}
+head(codaSamples)
+```
+
+
+
+
+
