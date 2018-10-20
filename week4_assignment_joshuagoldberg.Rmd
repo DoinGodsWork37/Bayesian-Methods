@@ -1,0 +1,92 @@
+---
+title: 'Week 4 Assignmen: Markov Chain Monte Carlo'
+author: "Joshua Goldberg"
+date: "`r format(Sys.time(), '%B, %d %Y')`"
+output:
+  html_document:
+    df_print: paged
+  github_document: null
+  pdf_document: default
+editor_options:
+  chunk_output_type: inline
+always_allow_html: yes
+---
+
+```{r Global-options, include=FALSE}
+knitr::opts_chunk$set(fig.width=6, fig.height=4, fig.path='Figs/',
+                      warning=FALSE, message=FALSE)
+```
+
+```{r Preamble, echo=FALSE}
+# Enter package in p_load()
+# If package is not installed, p_load() will install and load the package
+if(!"pacman" %in% rownames(installed.packages())) {
+  install.packages("pacman")
+  }
+pacman::p_load(tidyverse, ggthemes, here)
+
+# Set default ggplot theme to tufte
+theme_set(ggthemes::theme_tufte())
+```
+
+```{r Copy-files, echo=FALSE, eval=FALSE}
+# Enter files to load to project directory in from = "~/Downloads/your_file_name_here"
+file.copy(from = "~/Downloads/", to = here::here(), 
+          overwrite = TRUE, recursive = FALSE, 
+          copy.mode = TRUE)
+```
+
+Explore bivariate normal distribution density using MCMC.
+
+# 1 Bivariate normal distribution
+Set parameters of bivariate normal distribution $<\mu_1,\mu_2,\sigma_1,\sigma_2,\rho>$
+```{r}
+myDenParams <- c(1, 1, 5, 5, .8)
+```
+
+Create a function `den <- function(argmts, params)`, where argmts is vector $<x_1,x_2>$ and params is vector of distribution parameters $<\mu_1,\mu_2,\sigma_1,\sigma_2,\rho>$ implementing formula for bivariate normal distribution
+density $$f(x_1,x_2)=\frac{1}{2\pi\sigma_1\sigma_2\sqrt{1-\rho^2}}e^\frac{-z}{2(1-\rho^2)}$$, where $$z=\frac{(x_1−\mu_1)^2}{\sigma^2_1}−\frac{2\rho(x_1−\mu_1)(x_2−\mu_2)}{\sigma_1\sigma_2}+\frac{(x_2−\mu_2)^2}{\sigma^2_2}$$
+```{r Den-function}
+calc_z <- function(x, params) {
+  x1 <- x[1]
+  x2 <- x[2]
+  mu1 <- params[1]
+  mu2 <- params[2]
+  sigma1 <- params[3]
+  sigma2 <- params[4]
+  rho <- params[5]
+  ((x1 - mu1)^2 / sigma1^2) - ((2 * rho * (x1 - mu1) * (x2 - mu2)) / (sigma1 * sigma2)) + ((x2 - mu2)^2 / (sigma2^2))
+}
+
+calc_z(c(1, 1), myDenParams)
+
+den <- function(argmts, params) {
+  x1 <- argmts[1]
+  x2 <- argmts[2]
+  mu1 <- params[1]
+  mu2 <- params[2]
+  sigma1 <- params[3]
+  sigma2 <- params[4]
+  rho <- params[5]
+  (1 / (2 * pi * sigma1 * sigma2 * sqrt(1 - rho^2))) * exp(1)^((-calc_z(c(x1, x2), params)) / (2 * (1 - rho^2)))
+}
+
+den(c(1, 1), myDenParams)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
