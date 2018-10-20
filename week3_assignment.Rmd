@@ -2,17 +2,18 @@
 title: "Week 3 Assignment"
 author: "Joshua Goldberg"
 date: "`r format(Sys.time(), '%B, %d %Y')`"
-always_allow_html: yes
 output:
-  github_document: 
+  html_document:
+    df_print: paged
+  github_document: null
   pdf_document: default
-editor_options: 
+editor_options:
   chunk_output_type: inline
+always_allow_html: yes
 ---
 
 ```{r Global-options, include=FALSE}
-knitr::opts_chunk$set(fig.width=6, fig.height=4, fig.path='Figs/',
-                      warning=FALSE, message=FALSE, cache=TRUE)
+knitr::opts_chunk$set(fig.path='Figs/', warning=FALSE, message=FALSE, cache=TRUE)
 ```
 
 ```{r Preamble, echo=FALSE}
@@ -86,7 +87,7 @@ The posterior distribution has new mode that can be calculated by formula $\omeg
 cbind(prior = x[which.max(priorBetaDens)], posterior = x[which.max(posteriorBetaDens)])
 ```
 
-The posterior has shifted dramatically to the right, implying a weak prior.
+The posterior has shifted to the right, implying a somewhat weak prior. The mode has shifted meaningfully from the prior to the posterior. `b` was much larger relatively to `a` in the prior compared to the posterior. 
 ```{r}
 plot(
   x,
@@ -94,8 +95,6 @@ plot(
   type = 'l',
   lwd = 3,
   col = 'blue',
-  ylim = c(0, 25),
-  xlim = c(0, .2)
 )
 lines(x, posteriorBetaDens, lwd = 3, col = 'orange')
 legend(
@@ -108,10 +107,17 @@ legend(
 
 Mean, variance, and concentration:
 ```{r}
-(muPosterior = postA / (postA + postB))
-(varPosterior <- postA * postB / (postA + postB) ^ 2 / (postA + postB + 1))
-(kappaPosterior <- postA + postB)
+muPosterior = postA / (postA + postB)
+varPosterior <- postA * postB / (postA + postB) ^ 2 / (postA + postB + 1)
+kappaPosterior <- postA + postB
+
+prior_post <- rbind(cbind(mu, sigma_squared, kappa = a + b), cbind(muPosterior, varPosterior, kappaPosterior))
+colnames(prior_post) <- c("mu", "var", "kappa")
+rownames(prior_post) <- c("prior", "posterior")
+prior_post
 ```
+
+The mean, variance, and concentration have all shifted dramatically from the prior.
 
 ## 1.5 Grid approximation
 Assume that probability of tumor $\theta$ in control group is concentrated around unknown mode $\omega$ of beta distribution with concentration level of 20 ($x\theta$).
@@ -131,6 +137,7 @@ Omega <- Theta <- seq(0 , 1 , length = 101)
 plot(Omega, dbeta(Omega, A_omega, B_omega))
 ```
 
+### 1.5.1 Find joint prior distribution and marginals for $\theta$ and $\omega$
 The joint prior is: $p(\theta,\omega)=p(\theta|\omega)p(\omega)=dbeta(\theta|\omega(100−2)+1,(1−\omega)(100−2)+1)dbeta(\omega|A_\omega,B_\omega)$
 
 ```{r}
@@ -169,6 +176,7 @@ persp(
 )
 ```
 
+The contour plot shows as $\omega$ increases, $\theta$ follows:
 ```{r}
 contour(
   x = Omega,
@@ -180,7 +188,8 @@ contour(
 )
 ```
 
-Dependence is strong between $\theta$ and prior:
+### 1.5.2 Observe and interpret dependence of $\theta$ on $\omega$ based on posterior distributions
+Dependence is strong and positive between $\theta$ and prior. As $\omega$ increases, $\theta$ increases due to low $\kappa$.
 ```{r}
 par(mfrow = c(3, 1))
 Prior.theta.omega.25 <- jointPrior(Theta, 0.25, A_omega, B_omega, K)
@@ -208,13 +217,14 @@ plot(Theta,
      ylab = "p(theta|omega=0.75)")
 ```
 
+### 1.5.3 Find likelihood function for the observed data
 The likelihood is based on: $p(y|\theta)=\theta^9(1−\theta)^3$.
 ```{r}
 likeli <- function(theta, s, k) {
   theta ^ k * (1 - theta) ^ (s - k)
 }
 
-likelihood <- likeli(Theta, 20, 8)
+likelihood <- likeli(Theta, Data[[1]], Data[[2]])
 plot(Theta,
      likelihood,
      type = "l",
@@ -222,9 +232,11 @@ plot(Theta,
      main = "Likelihood")
 ```
 
+### 1.5.4 Find and plot joint posterior distribution for $\theta,\omega$ and the marginals
 ```{r}
 Posterior <- apply(Prior.theta.omega, 2, function(z) z * likelihood)
 Posterior <- Posterior / sum(Posterior)
+Posterior[1:5, 1:5]
 ```
 
 Plot the joint posterior distribution.
@@ -240,3 +252,105 @@ persp(
 )
 ```
 
+```{r}
+contour(
+  x = Theta,
+  y = Omega,
+  z = Posterior,
+  ylab = "omega",
+  xlab = "theta",
+  main = "Joint Posterior Distribution"
+)
+```
+
+Calculate and plot posterior marginal distributions $p(\theta|y)$, $p(\omega|y)$ by adding the joint posterior matrix by row or by column.
+```{r}
+Posterior.omega.marginal <- apply(Posterior, 2, sum)
+Posterior.omega.marginal <- Posterior.omega.marginal / sum(Posterior.omega.marginal) * 100
+plot(Omega, Posterior.omega.marginal, type = "l")
+```
+
+```{r}
+Posterior.theta.marginal <- apply(Posterior, 1, sum)
+Posterior.theta.marginal <- Posterior.theta.marginal / sum(Posterior.theta.marginal) * 100
+plot(Theta, Posterior.theta.marginal, type = "l")
+```
+
+### 1.5.5 Observe and interpret dependence of $\theta$ on $\omega$ based on posterior distributions
+As $\omega$ increases, $\theta$ follows similar to the prior. However, the relationship is not as pronounced. This is because $\kappa$ increased for the posterior.
+```{r}
+par(mfrow = c(3, 1))
+
+# Omega = 0.25
+Post.theta.omega.25 <- Posterior[, match(0.25, Omega)]
+Post.theta.omega.25 <-
+  Post.theta.omega.25 / sum(Post.theta.omega.25) * 100
+plot(
+  Theta,
+  Post.theta.omega.25,
+  type = "l",
+  ylab = "p(theta|omega=0.25,y)",
+  main = "Marginal posterior for Theta"
+)
+
+# Omega = 0.5
+Post.theta.omega.5 <- Posterior[, match(0.5, Omega)]
+Post.theta.omega.5 <- Post.theta.omega.5 / sum(Post.theta.omega.5) * 100
+plot(
+  Theta,
+  Post.theta.omega.5,
+  type = "l",
+  ylab = "p(theta|omega=0.5,y)",
+  main = "Marginal posterior for Theta"
+)
+
+# Omega = 0.75
+Post.theta.omega.75 <- Posterior[, match(0.75, Omega)]
+Post.theta.omega.75 <-
+  Post.theta.omega.75 / sum(Post.theta.omega.75) * 100
+plot(
+  Theta,
+  Post.theta.omega.75,
+  type = "l",
+  ylab = "p(theta|omega=0.75,y)",
+  main = "Marginal posterior for Theta"
+)
+```
+
+### 1.5.6 Compare marginal priors and posteriors for both parameters
+The marginal posterior for $\omega$ does not shift much relative to the change in marginal $\theta$
+```{r}
+matplot(Theta,
+        cbind(Prior.theta.marginal, Posterior.theta.marginal),
+        type = "l")
+
+matplot(Omega,
+        cbind(Prior.omega.marginal, Posterior.omega.marginal),
+        type = "l")
+```
+
+### 1.5.7 Compare conditional priors and posteriors for $\theta$
+
+The conditional posterior for $\theta$ changes meaningfully from the prior. We see the same positive dependence between $\omega$ and $\theta$ that we saw in the contour and multiple plots above. 
+```{r}
+matplot(
+  Theta,
+  cbind(Prior.theta.omega.25, Post.theta.omega.25),
+  type = "l",
+  ylab = "Conditional Prior and Posterior, omega=0.25"
+)
+
+matplot(
+  Theta,
+  cbind(Prior.theta.omega.5, Post.theta.omega.5),
+  type = "l",
+  ylab = "Conditional Prior and Posterior, omega=0.5"
+)
+
+matplot(
+  Theta,
+  cbind(Prior.theta.omega.75, Post.theta.omega.75),
+  type = "l",
+  ylab = "Conditional Prior and Posterior, omega=0.75"
+)
+```
