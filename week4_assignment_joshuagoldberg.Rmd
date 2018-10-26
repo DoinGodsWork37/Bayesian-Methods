@@ -15,8 +15,8 @@ always_allow_html: yes
 ---
 
 ```{r Global-options, include=FALSE}
-knitr::opts_chunk$set(fig.width=6, fig.asp=.618, fig.align="center", fig.path='Figs/',
-                      warning=FALSE, message=FALSE)
+knitr::opts_chunk$set(fig.width=6, fig.asp=.618, fig.align="center",
+                      fig.path='Figs/', warning=FALSE, message=FALSE, cache=TRUE)
 ```
 
 ```{r Preamble, echo=FALSE}
@@ -25,7 +25,7 @@ knitr::opts_chunk$set(fig.width=6, fig.asp=.618, fig.align="center", fig.path='F
 if(!"pacman" %in% rownames(installed.packages())) {
   install.packages("pacman")
   }
-pacman::p_load(tidyverse, ggthemes, here, purrr, furrr)
+pacman::p_load(tidyverse, ggthemes, here, purrr, furrr, gganimate)
 
 # Set default ggplot theme to tufte
 theme_set(ggthemes::theme_tufte())
@@ -129,7 +129,7 @@ set.seed(1)
 result <- run_mcmc(10000, c(10, -10), .05)
 
 result_plot <- result %>% 
-  mutate(accept = factor(accept, levels = c(0, 1), labels = c("Rejections", "Trajectory")))
+  mutate(accept = factor(accept, levels = c(0, 1), labels = c("Rejection", "Trajectory")))
   
 result_plot %>%
   arrange(desc(accept)) %>% 
@@ -167,7 +167,7 @@ plot_all_data <- map(multi_result, ~ mutate(
   accept = factor(
     accept,
     levels = c(0, 1),
-    labels = c("Rejections", "Trajectory")
+    labels = c("Rejection", "Trajectory")
   )
 )) %>%
   bind_rows() %>% 
@@ -189,8 +189,14 @@ plot_all_data %>%
 ```
 
 ## Try Different `sigProp` Values
+We define two functions for exploration: 
+
+1. `multi_start`: takes multiple random starts to explore convergence paths
+
+2. `metropolis_grid`: used to visualize the results of our exploration 
+
 ```{r Different-sigma}
-multi_start <- function(runs, iteration, seed, sd) {
+multi_start <- function(runs, iteration, seed = NULL, sd) {
   set.seed(seed)
   init <- rerun(length(runs), sample(-75:75, 2))
   
@@ -212,7 +218,7 @@ multi_start <- function(runs, iteration, seed, sd) {
     accept = factor(
       accept,
       levels = c(0, 1),
-      labels = c("Rejections", "Trajectory")
+      labels = c("Rejection", "Trajectory")
     )
   )) %>%
     bind_rows() %>% 
@@ -225,8 +231,9 @@ multi_start <- function(runs, iteration, seed, sd) {
 }
 
 metropolis_grid <- function(param, runs, columns, iterations = NULL, sd_test = FALSE, default_sd = NULL, seed = NULL) {
+  
   if (!sd_test & is.null(default_sd)) {
-    stop("default_sd is NULL. Specification required for sd_test")
+    stop("default_sd is NULL. Specification required for sd_test.")
   }
   
   sd <- default_sd
@@ -257,6 +264,7 @@ metropolis_grid <- function(param, runs, columns, iterations = NULL, sd_test = F
                           sd = sd
                         ))
   }
+  
   plots <- furrr::future_map2(results, subtitles, function(data, subtitles) {
     data$plot_data %>%
       ggplot(aes(x1, x2, color = run)) +
@@ -272,9 +280,9 @@ metropolis_grid <- function(param, runs, columns, iterations = NULL, sd_test = F
   )
   
   title_grob <- grid::textGrob(
-    label = glue::glue('Metropolis Rule: Normal Bivariate Distribution
+    label = glue::glue("Metropolis Rule: Normal Bivariate Distribution
     Accepted Proposal Path Random Starts: {length(runs)}
-    {main_subtitle}'),
+    {main_subtitle}"),
     x = unit(.5, "lines"), 
     y = unit(0, "lines"),
     hjust = 0, 
@@ -329,3 +337,45 @@ metropolis_grid(
   seed = 1
 )
 ```
+
+```{r Animate, gganimate = list(nframes = 200, fps = 30, device = "svg", duration = 30), eval=FALSE}
+runs <- 1:8
+iterations <- 25000
+sd <- .1032424
+dat <- multi_start(runs = runs, iteration = iterations, sd = sd)
+
+a <- dat$plot_data %>%
+  group_by(run) %>% 
+  mutate(step = as.numeric(row_number())) %>%
+  .[complete.cases(.), ] %>% 
+  ggplot(aes(x1, x2, color = run)) +
+  geom_point(size = 2.5) +
+  geom_label(data = dat$start, aes(x1, x2, label = glue::glue("Start {run}")), size = 2.5) +
+  geom_label(data = dat$end, aes(x1, x2, label = glue::glue("End {run}")), size = 2.5) +
+  scale_color_colorblind(guide = FALSE) +
+  labs(title = glue::glue("Metropolis Rule: Normal Bivariate Distribution
+                Steps: {scales::comma(iterations)}"),
+       subtitle = glue::glue("Accepted Proposal Path Random Starts: {length(runs)}
+                             Standard devation: {sd}")) 
+
+animate(a)
+ggsave("markov_chain_monte_carlo.png", width = 6, height = 4)
+
+rerun(10, dat$plot_data %>%
+  group_by(run) %>% 
+  mutate(step = as.numeric(row_number()))) %>%
+  bind_rows() %>%
+  .[complete.cases(.), ] %>% 
+  ggplot(aes(x1, x2, color = run)) +
+  geom_point(size = 2.5) +
+  scale_color_colorblind(guide = FALSE) +
+  labs(title = "Metropolis Rule: Normal Bivariate Distribution
+                Step: {scales::comma(round(frame_time))} of {scales::comma(iterations)}",
+       subtitle = glue::glue("Accepted Proposal Path Random Starts: {length(runs)}
+                             Standard devation: {sd}")) +
+  transition_time(step) +
+  ease_aes("linear")
+
+gganimate::save_animation(gganimate::last_animation(), "markov_chain_monte_carlo.gif")
+```
+

@@ -1,0 +1,784 @@
+---
+title: "Workshop 5"
+author: "Joshua Goldberg"
+date: "`r format(Sys.time(), '%B, %d %Y')`"
+output:
+  html_document:
+    theme: united
+    highlight: textmate
+    code_folding: show
+    toc: true
+    toc_float: true
+editor_options:
+  chunk_output_type: inline
+always_allow_html: yes
+---
+
+```{r Global-options, include=FALSE}
+knitr::opts_chunk$set(fig.width=6, fig.height=4, fig.path='Figs/',
+                      warning=FALSE, message=FALSE, cache=TRUE)
+```
+
+```{r Preamble, echo=FALSE}
+# Enter package in p_load()
+# If package is not installed, p_load() will install and load the package
+if(!"pacman" %in% rownames(installed.packages())) {
+  install.packages("pacman")
+  }
+pacman::p_load(tidyverse, ggthemes, here, rjags, rstan, shinystan)
+
+# Set default ggplot theme to tufte
+theme_set(ggthemes::theme_tufte())
+```
+
+```{r Copy-files, echo=FALSE, eval=FALSE}
+# Enter files to load to project directory in from = "~/Downloads/your_file_name_here"
+file.copy(from = "~/Downloads/documents-MScA Bayesian Methods (32014)-MScA 32014 Lecture 6-TouchAnalysisShiny.Rdata", to = here::here(), 
+          overwrite = TRUE, recursive = FALSE, 
+          copy.mode = TRUE)
+```
+
+# 1 References
+
+# 2 Model Comparison
+
+Define the model. Bayesian plays with parameters, not data, so there is no contrast issue.
+```{r}
+modelString=" 
+model {
+  for (i in 1:Ntotal) {
+    y[i]~dbern(theta)
+  }
+  theta~dbeta(omega[m]*(kappa-2)+1,(1-omega[m])*(kappa-2)+1) # theta (binomial) parameters omega & kappa
+  omega[1]<-.25
+  omega[2]<-.75
+  kappa<-12
+  m~dcat(mPriorProb[]) # categorical distribution (same as multinomial)
+  mPriorProb[1]<-.5 # probability
+  mPriorProb[2]<-.5 # probability
+}
+"
+writeLines(modelString,con = "Tempmodel.txt")
+```
+
+In this model there there are 2 different prior distributions for the data parameter θ.
+For m=1 the prior is concentrated around $\omega1=0.25$ and for $m=2$ the prior is concentrated around $\omega2=0.75$.
+Concentration levels are the same $\kappa=12$. The resulting parameters of beta distribution are: ($\alpha1=3.5,\beta1=8.5$) and ($\alpha2=8.5,\beta2=3.5$), correspondingly.
+
+Create list of data corresponding to 6 successes out of 9 trials.
+```{r}
+# 6 successes out of 9 trials
+y <- c(rep(0, 3), rep(1, 6))
+(Ntotal <- length(y))
+(dataList <- list(y = y, Ntotal = Ntotal))
+```
+
+Send model to **JAGS**.
+```{r}
+jagsModel <- jags.model(
+    file = "Tempmodel.txt",
+    data = dataList,
+    n.chains = 4,
+    n.adapt = 500
+  )
+```
+
+```{r}
+names(jagsModel)
+```
+
+Burn in.
+```{r}
+update(jagsModel, n.iter = 600)
+```
+
+Generate MCMC trajectories.
+```{r}
+codaSamples <- coda.samples(
+    jagsModel,
+    variable.names = c("m"),
+    thin = 1, # Thin 1 means you do not skip intervals and collect everything immediately (may lead to                 auto-correlation)
+    n.iter = 5000
+  )
+list.samplers(jagsModel)
+```
+
+```{r}
+head(codaSamples)
+```
+
+Analyze convergence.
+Mean is average of all chains together; could do summary per chain.
+```{r}
+summary(codaSamples)
+```
+
+Trace is not meaningful since we only have two models. Density of `m` tells us everything about which model performed best. If you see that one model appears less popular, that means you spent less time and may need to increase iteration to make sure less favorable model is in fact less favorable.
+```{r}
+plot(codaSamples)
+```
+
+Plot of the samples is not very informative because each sample is a trajectory switching between 1 and 2.
+```{r}
+autocorr.plot(codaSamples, ask = F)
+```
+
+Effective size shows you how much shorter your sample would be if you try to remove auto correlation (thinning).
+```{r}
+effectiveSize(codaSamples)
+```
+
+We see that autocorrelation converges to zero only in about 5 lags or so. This is confirmed by ESS.
+
+Rerun the chains with thinning paramater equal to 5.
+```{r}
+codaSamples <- coda.samples(
+    jagsModel,
+    variable.names = c("m"),
+    thin = 5,
+    n.iter = 5000
+  )
+plot(codaSamples)
+```
+
+```{r}
+autocorr.plot(codaSamples, ask = F)
+```
+
+```{r}
+lapply(codaSamples, length)
+```
+
+Now autocorrelation function is not significant.
+Effective size is 3640.3723806, but this is out of total 4,000 of observations instead of 20,000. Thinning reduces sample. When we apply thinning we need to make sample longer.
+
+Potential scale reduction factor or shrink factor showed convergence.
+```{r}
+gelman.diag(codaSamples)
+```
+
+```{r}
+gelman.plot(codaSamples)
+```
+
+Now analyze the results.
+
+Look at the chain means.
+```{r}
+(means <- lapply(codaSamples, mean))
+```
+
+Means are calculated as
+$$Mean=1P(m=1)+2P(m=2)=1(1−P(m=2))+2P(m=2)=1−P(m=2).$$
+From this $P(m=2)=Mean−1$
+
+Find posterior probabilities of $m=2$ for each of the 4 chains and their average.
+```{r}
+(prob.2 <- lapply(means, function(z) z - 1))
+```
+
+```{r}
+mean(unlist(prob.2))
+```
+
+This means that posterior probability of $m=1$ is 0.16925.
+Obviously, observing 6 successes out of 9 is more consistent with the model concentrating around level of 0.75.
+
+Find how much time each chain spent in each of the state for m.
+```{r}
+lapply(codaSamples, function(z) sum(z == 2) / length(z))
+```
+
+This is a caveat of using hierarchical model for model comparison: if one of the models is a strong leader the sample for the underdog becomes too short which leads to more unstable results.
+
+One obvious way to overcome this is to sacrifice efficiency and run chains longer.
+
+Also, it may be a good idea to try avoiding significant difference in prior probabilities of competing models.
+
+# 3 Application of Stan
+```{r}
+source("DBDA2Eprograms/DBDA2E-utilities.R")
+```
+
+Hamiltonian simulations are used to overcome the limitations of **JAGS**. Hamilton takes big leaps and then analyze the space before moving on. It works well for continuous distribution with narrow hallways and auto correlation. **Stan** has complex structure of parameters that they tune automatically. However, when tuning is too complex, **JAGS** may be better.
+
+## 3.1 Estimation of binomial probability
+Consider a simple problem of estimation of parameter of binomial distribution.
+
+Specification of model is similar to **JAGS**.
+```{r}
+# Specify model:
+modelString = "
+  data {
+    int<lower=0> N ; //integer n lower bound 0
+    int y[N] ; //length-N vector of integers 
+  }
+  parameters {
+    real<lower=0,upper=1> theta ;
+  }
+  model { 
+  //from top to bottom
+    theta ~ beta(1,1) ;
+    y ~ bernoulli(theta) ; 
+  }
+" # close quote for modelString
+```
+
+**Biggest difference between Stan and JAGS**
+Stan is based on C++ library. That is why the model description must be translated into C++. Then it compiles and becomes an executable dynamic shared object (DSO).
+This is done by `stan_model()`. **JAGS** is more like R.
+
+**Stan**: we go from bottom to top. We create dynamic object in C++; then we send to C++ and it is compiled there.
+
+**JAGS**: we go from top to bottom.
+```{r}
+# Translate model to C++ and compile to DSO:
+stanDso <- stan_model(model_code = modelString) 
+```
+
+Data are specified similar to **JAGS**.
+```{r}
+# Specify data:
+N <- 50 
+z <- 10
+y <- c(rep(1, z), rep(0, N - z))
+
+dataList = list(
+  y = y,
+  N = N 
+)
+```
+
+Running MCMC is done by `sampling()`.
+Argument warmup has the same meaning as "burn in".
+Argument `iter` is total number of steps per chain, including warmup period.
+The total number of steps used for sampling from posterior distribution is
+`chains×(iter − warmup)thin`.
+
+Argument `init` is not used in the following call allowing Stan to used default random initiation.
+```{r}
+# Generate posterior sample:
+stanFit <- sampling(
+  object = stanDso,
+  data = dataList,
+  chains = 3,
+  iter = 1000,
+  warmup = 200, # same as burn in
+  thin = 1
+)
+```
+
+```{r}
+class(stanFit)
+```
+
+Use application **shinystan** for exploration of the MCMC object.
+Run application `launch_shinystan()`
+
+```{r, eval=FALSE}
+# Not evaluated in Rmd
+launch_shinystan(stanFit)
+```
+
+**Diagnostics**
+
+* **Stan** returns distribution in log format (bottom left)
+
+* Metropolis acceptance rate and how it is distributed relative to $\theta$
+
+* Histogram of the parameter, $\theta$; you have more acceptance in the area where $\theta$ should be
+
+* Numerically it was not possible to get to the acceptance area; you should not trust model if there are some divergence; when acceptances are low, divergence to be zero
+
+* Divergence: In the process of sending zigzag along the structure, something cannot be calculated (gradient or something; numerical problem; it's not rejection; rejection is complete calculation)
+
+* Check bottom of plot, it should converge and narrow
+
+* Energy information: it is complementary information to divergence; divergence shows you thinness of tails of posterior distribution; energy shows how fat the tails are; in ideal world, they should be identical
+
+* Treedepth: number of zigzags in one complex step; maximum treedepth was three; **STAN** complains after 11 steps/leap frogs; if you exceed 11, there will be warnings message (can increase limit to silence the error)
+
+* Step size information: number of leap frogs; can change size of leap frogs in order to control convergence
+
+* HDI: red interval is 80%; black interval is 95%; if multiple parameters then multiple intervals can be viewed
+
+* R^ is diagnostic by Gelman
+
+Use standard graphs from **Stan** or from [K].
+```{r}
+# openGraph()
+traceplot(stanFit, pars = c("theta"))
+```
+
+```{r}
+# saveGraph(file=paste0(fileNameRoot,"StanTrace"),type="eps")
+# openGraph()
+plot(stanFit, pars = c("theta"))
+```
+
+```{r}
+#saveGraph(file=paste0(fileNameRoot,"StanPlot"),type="eps")
+
+# Make graphs:
+# For consistency with JAGS-oriented functions in DBDA2E collection,
+# convert stan format to coda format. This excludes warmup and thinned steps.
+mcmcCoda = mcmc.list(lapply(1:ncol(stanFit) ,
+                            function(x) {
+                              mcmc(as.array(stanFit)[, x, ])
+                            }))
+
+diagMCMC(mcmcCoda , parName = c("theta"))
+# saveGraph(file=paste0(fileNameRoot,"Diag"),type="eps")
+```
+
+## 3.2 Repeated use of the same DSO
+
+```{r}
+# Specify data:
+N = 50
+z = 40
+y = c(rep(1, z), rep(0, N - z))
+dataList = list(y = y ,
+                N = N)
+dataList
+```
+
+Run MCMC with these data.
+Note that we use the same dynamic shared object (DSO)
+```{r}
+# Generate posterior sample:
+stanFit <- sampling(
+  object = stanDso ,
+  data = dataList ,
+  chains = 3 ,
+  iter = 1000 ,
+  warmup = 200 ,
+  thin = 1
+)
+```
+
+Explore the graphs.
+```{r}
+#openGraph()
+traceplot(stanFit, pars = c("theta"))
+```
+
+```{r}
+#openGraph()
+plot(stanFit, pars = c("theta"))
+```
+
+```{r}
+# Make graphs:
+# For consistency with JAGS-oriented functions in DBDA2E collection,
+# convert stan format to coda format. This excludes warmup and thinned steps.
+mcmcCoda = mcmc.list(lapply(1:ncol(stanFit) ,
+                            function(x) {
+                              mcmc(as.array(stanFit)[, x, ])
+                            }))
+
+diagMCMC(mcmcCoda , parName = c("theta"))
+```
+
+## 3.3 General structure of model description in Stan
+
+Each block has to be in curly braces
+
+* Data: declare variables
+
+* Transformation data: transform data here
+
+* Parameters: modify parameters (binomial: $\theta$)
+
+* Model: go from top to bottom
+
+* Generated quantities: puts list of what you want to analyze after the chains are created
+
+```{r, eval=FALSE}
+data {
+  ...declarations...
+}
+transformed data {
+  ...declarations...statements...
+}
+parameters {
+  ...declarations...
+}
+transformed parameters {
+  ...declarations...statements...
+}
+model {
+  ...declarations...statements...
+}
+generated quantities {
+  ...declarations...statements...
+}
+```
+
+The lines of description are processed in order.
+
+## 3.4 The following example shows how to sample from prior distribution
+It may be useful to sample from prior distributions.
+
+* For checking if the prior actually has the properties we wanted it to have when translated our prior knowledge in terms of prior distribution.
+
+* For checking the shape of prior distribution in middle levels of hierarchical model when explicit prior was specified on the top level.
+
+* For checking implied shape of the prior, for example, prior for difference of results for control and treated groups when we specify only separate priors for each group.
+
+In **Stan** sampling from prior is done by commenting out description of likelihood function, but still leaving description of data in specifications of the model.
+
+Use the code from the previous section to sample from prior distribution.
+
+When there are multiple layers and the shape is unknown; or if we have multiple complex heiarchical model, look at prior?
+```{r}
+#------------------------------------------------------------------------------
+# Generate sample from prior:
+
+# Specify model:
+modelString = "
+  data {
+    int<lower=0> N ;
+    int y[N] ; 
+  }
+  parameters {
+    real<lower=0,upper=1> theta ;
+  }
+  model {
+    theta ~ beta(1,1) ;
+//    y ~ bernoulli(theta) ;  // likelihood commmented out
+  }
+" # close quote for modelString
+
+# Translate model to C++ and compile to DSO:
+stanDso <- stan_model(model_code = modelString) 
+```
+
+```{r}
+# Specify data:
+N <- 50
+z <- 10
+y <- c(rep(1, z), rep(0, N - z))
+dataList = list(y = y ,
+                N = N)
+
+# Generate posterior sample:
+stanFit <- sampling(
+  object = stanDso ,
+  data = dataList ,
+  chains = 3 ,
+  iter = 1000 ,
+  warmup = 200 ,
+  thin = 1
+)
+```
+
+```{r}
+# openGraph()
+traceplot(stanFit, pars = c("theta"))
+```
+
+```{r}
+#openGraph()
+plot(stanFit, pars = c("theta"))
+```
+
+```{r}
+# Make graphs:
+# For consistency with JAGS-oriented functions in DBDA2E collection, 
+# convert stan format to coda format. This excludes warmup and thinned steps.
+mcmcCoda = mcmc.list(lapply(1:ncol(stanFit) ,
+                            function(x) {
+                              mcmc(as.array(stanFit)[, x, ])
+                            }))
+
+diagMCMC(mcmcCoda , parName = c("theta"))
+```
+
+# 4 Therapeutic touch example [K], page 240
+## 4.1 The problem
+"Therapeutic touch is a nursing technique in which the practitioner manually manipulates the âenergy fieldâ of a patient who is suffering from a disease. The practitioner holds her or his hands near but not actually touching the patient, and repatterns the energy field to relieve congestion and restore balance, allowing the body to heal. Rosa, Rosa, Sarner, and Barrett (1998) reported that therapeutic touch has been widely taught and widely used in nursing colleges and hospitals despite there being little if any evidence of its efficacy.
+
+Rosa et al. (1998) investigated a key claim of practitioners of therapeutic touch, namely, that the practitioners can sense a bodyâs energy field. If this is true, then practitioners should be able to sense which of their hands is near another personâs hand, even without being able to see their hands. The practitioner sat with her hands extended through cutouts in a cardboard screen, which prevented the practitioner from seeing the experimenter. On each trial, the experimenter flipped a coin and held her hand a few centimeters above one or the other of the practitionerâs hands, as dictated by the flip of the coin. The practitioner then responded with her best guess regarding which of her handâs was being hovered over.
+
+Each trial was scored as correct or wrong. The experimenter (and co-author of the article) was 9-years old at the time.
+
+Each practitioner was tested for 10 trials. There were a total of 21 practitioners in the study, seven of whom were tested twice approximately a year apart. The retests were counted by the authors as separate subjects, yielding 28 nominal subjects."
+
+The proportions correct for the 28 subjects are shown in Figure 9.9. of the book.
+Chance performance (guessing) is 0.50.
+
+The question is how much the group as a whole differed from chance performance, and how much any individuals differed from chance performance?
+
+This hierarchical model is appropriate for these data, because it estimates the underlying ability of each subject while simultaneously estimating the modal ability of the group and the consistency of the group.
+
+Moreover, the distribution of proportions correct across subjects can be meaningfully described as a beta distribution.
+
+With 28 subjects, there are a total of 30 parameters being estimated.
+
+The example runs with the script "Stan-Ydich-XnomSsubj-MbernBetaOmegaKappa.R" given in the book.
+```{r}
+source(glue::glue("{here::here()}/DBDA2Eprograms/Stan-Ydich-XnomSsubj-MbernBetaOmegaKappa.R"))
+show(genMCMC)
+```
+
+## 4.2 Solution in **Stan**
+Here we call Stan directly.
+
+Read the data.
+Create the data list for the model.
+```{r}
+myData = read.csv("./DBDA2Eprograms/TherapeuticTouchData.csv")
+
+y <- as.numeric(myData$y)
+s <- as.numeric(myData$s) # ensures consecutive integer levels
+# Do some checking that data make sense:
+if (any(y != 0 & y != 1)) {
+  stop("All y values must be 0 or 1.")
+}
+
+Ntotal = length(y)
+Nsubj = length(unique(s))
+
+  # Specify the data in a list, for later shipment to JAGS:
+dataList = list(
+  y = y,
+  s = s,
+  Ntotal = Ntotal,
+  Nsubj = Nsubj
+)
+```
+
+Describe the model.
+
+* Parameter: probability of theta, because it has subscript and subjects, it is a vector; mode; $\kappa-2+2$; use transformation back to $\kappa$; $\kappa-2$ is distributed gamma (domain 0 and above); easier to find distribution for $\kappa-2$ which goes to 0
+
+```{r}
+# THE MODEL.
+modelString = "
+data {
+  int<lower=1> Nsubj ;
+  int<lower=1> Ntotal ;
+  int<lower=0,upper=1> y[Ntotal] ;
+  int<lower=1> s[Ntotal] ; // notice Ntotal not Nsubj
+}
+parameters {
+  real<lower=0,upper=1> theta[Nsubj] ; // individual prob correct
+  real<lower=0,upper=1> omega ;        // group mode
+  real<lower=0> kappaMinusTwo ;        // group concentration minus two
+}
+transformed parameters {
+real<lower=0> kappa ;  
+  kappa = kappaMinusTwo + 2 ;
+}
+model {
+  omega ~ beta( 1 , 1 ) ;
+  kappaMinusTwo ~ gamma( 0.01 , 0.01 ) ; // mean=1 , sd=10 (generic vague)
+  // kappaMinusTwo ~ gamma( 1.105125 , 0.1051249 ) ;  # mode=1 , sd=10 
+  theta ~ beta( omega*(kappa-2)+1 , (1-omega)*(kappa-2)+1 ) ; // vectorized 28 thetas
+  for ( i in 1:Ntotal ) {
+    y[i] ~ bernoulli( theta[s[i]] ) ; // likelihood function; theta depends on s
+  }
+}
+" # close quote for modelString
+```
+
+Initialize the model.
+```{r}
+# INTIALIZE THE CHAINS.
+# Initial values of MCMC chains based on data:
+initsList = function() {
+  thetaInit = rep(0, Nsubj)
+  for (sIdx in 1:Nsubj) {
+    # for each subject
+    includeRows = (s == sIdx) # identify rows of this subject
+    yThisSubj = y[includeRows]  # extract data of this subject
+    resampledY = sample(yThisSubj , replace = TRUE) # resample
+    thetaInit[sIdx] = sum(resampledY) / length(resampledY)
+  }
+  thetaInit = 0.001 + 0.998 * thetaInit # keep away from 0,1
+  meanThetaInit = mean(thetaInit)
+  kappaInit = 100 # lazy, start high and let burn-in find better value
+  return(list(
+    theta = thetaInit ,
+    omega = meanThetaInit ,
+    kappaMinusTwo = kappaInit - 2
+  ))
+}
+```
+
+Run the chains.
+```{r}
+# RUN THE CHAINS
+parameters = c("theta", "omega", "kappa") # The parameters to be monitored
+burnInSteps = 500            # Number of steps to burn-in the chains
+nChains = 4                  # nChains should be 2 or more for diagnostics
+numSavedSteps = 50000
+thinSteps = 1
+
+# Translate to C++ and compile to DSO:
+stanDso <- stan_model(model_code = modelString) 
+```
+
+```{r}
+# Get MC sample of posterior:
+startTime = proc.time()
+stanFit <- sampling(
+  object = stanDso ,
+  data = dataList ,
+  #pars = parameters , # optional
+  chains = nChains ,
+  iter = (ceiling(numSavedSteps / nChains) * thinSteps
+          + burnInSteps) ,
+  warmup = burnInSteps ,
+  thin = thinSteps ,
+  init = initsList
+) # optional  
+```
+
+```{r}
+stopTime <- proc.time()
+duration <- stopTime - startTime
+show(duration)
+```
+
+## 4.3 Analyze convergence
+```{r}
+show(stanFit)
+```
+
+## 4.4 Analyze the results
+```{r, eval=FALSE}
+launch_shinystan(stanFit)
+```
+
+Works like model with random effections.
+```{r}
+summary(stanFit)
+```
+
+Check if interval includes .5. If so, subjects are guessing (Bernoulli trial)
+```{r}
+plot(stanFit)
+```
+
+```{r}
+rstan::traceplot(
+  stanFit,
+  pars = c("omega", "kappa"),
+  ncol = 1,
+  inc_warmup = F
+)
+```
+
+Divergence will show as red dots in the upper part of the graph.
+```{r}
+pairs(stanFit, pars = c("omega", "kappa"))
+```
+
+Relationship between $\kappa$ and $\omega$. $\kappa$ is strength of the prior.
+```{r}
+stan_scat(stanFit, pars = c("omega", "kappa"))
+```
+
+Different distribution of $\theta$'s. All are close to .5.
+```{r}
+stan_hist(stanFit)
+```
+
+There is some auto-correlation. May need to do thinning.
+```{r}
+stan_ac(stanFit, separate_chains = T)
+```
+
+Stan Uses hamilton to generate proposals, but then uses Metropolis acceptance rule.
+```{r}
+stan_diag(stanFit, information = "sample", chain = 0)
+```
+
+```{r}
+stan_diag(stanFit, information = "stepsize", chain = 0)
+```
+
+If zigzags are 11 in one steps, Stan flags a problem.
+```{r}
+stan_diag(stanFit, information = "treedepth", chain = 0)
+```
+
+```{r}
+stan_diag(stanFit, information = "divergence", chain = 0)
+```
+
+Extract MCMC trajectories of hyperparameters $\omega,\kappa$. Does the pair of hyperparameters $\omega,\kappa$ show any dependence?
+```{r}
+OmegaKappa <-
+  cbind(
+    Omega = rstan::extract(stanFit, pars = c("omega", "kappa"))$'omega',
+    Kappa = rstan::extract(stanFit, pars = c("omega", "kappa"))$'kappa'
+  )
+
+head(OmegaKappa)
+```
+
+```{r}
+plot(rank(OmegaKappa[, "Omega"]), rank(OmegaKappa[, "Kappa"]))
+```
+
+Extract parameters $\theta$ for each tested individual.
+```{r}
+Thetas <- rstan::extract(stanFit, pars = names(stanFit))
+Thetas <- matrix(unlist(Thetas), ncol = 32, byrow = F)
+colnames(Thetas) <- names(stanFit)
+Thetas <- Thetas[, -(29:32)]
+head(Thetas)
+```
+
+Going back to the questions of the example.
+
+**How much the group as a whole differed from chance performance?**
+```{r}
+(sigmas <- apply(Thetas, 2, sd))
+```
+
+Not significant difference from 0.
+```{r}
+hist(as.vector(Thetas) - .5)
+```
+
+We see fatter tails.
+```{r}
+qqnorm(as.vector(Thetas))
+qqline(as.vector(Thetas))
+```
+
+Decisive rejection with t-test. We have huge sample, test becomes so sensitive and not possible to fail to reject hypothesis.
+```{r}
+t.test(as.vector(Thetas), mu = 0.5)
+```
+
+The number of degrees of freedom is so large that `t.test` becomes very sensitive.
+The distribution has fat tails because of non-constant standard deviations.
+
+Bayesian approach is based on HDI.
+```{r}
+library(HDInterval)
+```
+
+```{r}
+hdi(as.vector(Thetas))
+```
+
+What makes HDI so much wider than confidence interval?
+
+**How much any individuals differed from chance performance?** Many contain .5, so we do not believe subjects are not guessing.
+```{r}
+apply(Thetas, 2, function(z) hdi(z))
+```
+
+HDIs of all chains contain 0.5.
+**Why is HDI so much wider than the confidence interval?** `t.test` interval is more narrow. HDI received from posterior distribution. Meaning of confidence interval and HDI is practically the same. Confidence interval from `t.test` (assumes normal) knows Gaussian distribution, so this makes it more narrow. When we calculate HDI from distribution it is not restricted to normality.
+```{r}
+apply(Thetas, 2, function(z) t.test(as.vector(z), mu = 0.5)$p.value)
+```
+
+FNP approach rejects all the null hypotheses.

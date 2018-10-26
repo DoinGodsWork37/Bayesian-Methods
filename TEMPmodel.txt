@@ -1,10 +1,14 @@
-
-  model {
-    for ( i in 1:Ntotal ) {
-      y[i] ~ dbern( theta[s[i]] )
-    }
-    for ( sIdx in 1:Nsubj ) {      # Different thetas from same prior
-      theta[sIdx] ~ dbeta( 2 , 2 ) # N.B.: 2,2 prior; change as appropriate.
-    }
+ 
+model {
+  for (i in 1:Ntotal) {
+    y[i]~dbern(theta)
   }
-  
+  theta~dbeta(omega[m]*(kappa-2)+1,(1-omega[m])*(kappa-2)+1) # theta (binomial) parameters omega & kappa
+  omega[1]<-.25
+  omega[2]<-.75
+  kappa<-12
+  m~dcat(mPriorProb[]) # categorical distribution (same as multinomial)
+  mPriorProb[1]<-.5 # probability
+  mPriorProb[2]<-.5 # probability
+}
+
