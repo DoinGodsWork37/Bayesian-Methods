@@ -1,17 +1,23 @@
 ---
 title: "Week 5 Assignment: Binomial Output with Two Groups"
-author: "Your Name"
+author: "Joshua Goldberg"
 date: "`r format(Sys.time(), '%B, %d %Y')`"
-always_allow_html: yes
 output:
-  github_document: 
-  pdf_document: default
-editor_options: 
+  html_document:
+    theme: united
+    df_print: paged
+    highlight: textmate
+    code_folding: show
+    toc: true
+    toc_float: true
+editor_options:
   chunk_output_type: inline
+always_allow_html: yes
 ---
 
 ```{r Global-options, include=FALSE}
-knitr::opts_chunk$set(fig.width=6, fig.height=4, fig.path='Figs/',
+knitr::opts_chunk$set(fig.width=6, fig.asp=.618, fig.align="center",
+                      fig.path="Figs/",
                       warning=FALSE, message=FALSE, cache=TRUE)
 ```
 
@@ -21,10 +27,14 @@ knitr::opts_chunk$set(fig.width=6, fig.height=4, fig.path='Figs/',
 if(!"pacman" %in% rownames(installed.packages())) {
   install.packages("pacman")
   }
-pacman::p_load(tidyverse, ggthemes, here)
+pacman::p_load(tidyverse, ggthemes, here, rstan, HDInterval, tictoc, furrr, latex2exp)
 
 # Set default ggplot theme to tufte
 theme_set(ggthemes::theme_tufte())
+
+# Parallel Stan
+rstan_options(auto_write = TRUE)
+options(mc.cores = parallel::detectCores())
 ```
 
 ```{r Copy-files, echo=FALSE, eval=FALSE}
@@ -34,7 +44,458 @@ file.copy(from = "~/Downloads/", to = here::here(),
           copy.mode = TRUE)
 ```
 
-```{r}
+**This assignment uses data from the course project**
+**This project is individual**
 
+# 1 Data
+The course project is based on the following data: "Reuters/Ipsos Poll data, {DATE RANGE}"
+
+Literature for the project is uploaded on the course page:
+
+* [Gelman (2007)](http://ilykei.com/api/fileProxy/assignments%2FBayesian%20Methods%2FCourse%20Project%2032014%2FGelman.%20%202007.%20%20Struggles%20with%20Survey%20Weighting%20...%20SS_.pdf)
+
+* [Ghitza, Gelman](http://ilykei.com/api/fileProxy/assignments%2FBayesian%20Methods%2FCourse%20Project%2032014%2FGhitza%20and%20Gelman%202013.pdf)
+
+* [Burkner, BMRS Talk (2016)](http://ilykei.com/api/fileProxy/assignments%2FBayesian%20Methods%2FCourse%20Project%2032014%2Fbrms_talk_26.02.16.pdf)
+
+Data are panel data containing columns: `sex`, `race`, `age`, `education`, `state` and `y`.
+The output `y` is the binary version of the original data.
+It reflects opinion (positive-1, negative-0) about President Barak Obama during his 2012 campaign for re-election.
+
+```{r Data}
+data <- read_csv("assignments-Bayesian Methods-Course Project 32014-MScA_32014_BayesianMethods_CourseProjectData.csv")
+
+data %>% dim()
+data %>% head()
 ```
+
+## 1.1 Get familiar with the data and literature on the problem.
+
+# 2 Assignment: Binomial output with two groups
+
+## 2.1 Adjust the hierarchical model from section 4 of the workshop for the data of column `sex` and column `y`
+
+```{r Format-data}
+y <- as.numeric(data$y)
+s <- data$sex %>% parse_number() # ensures consecutive integer levels
+
+# Do some checking that data make sense:
+if (any(y != 0 & y != 1)) {
+  stop("All y values must be 0 or 1.")
+}
+
+Ntotal = length(y)
+Nsubj = length(unique(s))
+
+# Specify the data in a list, for later shipment to JAGS:
+dataList = list(
+  y = y,
+  s = s,
+  Ntotal = Ntotal,
+  Nsubj = Nsubj
+)
+```
+
+```{r Bad-model}
+# THE MODEL.
+modelString = "
+data {
+  int<lower=1> Nsubj ;
+  int<lower=1> Ntotal ;
+  int<lower=0,upper=1> y[Ntotal] ;
+  int<lower=1> s[Ntotal] ; // notice Ntotal not Nsubj
+}
+parameters {
+  real<lower=0,upper=1> theta[Nsubj] ; // individual prob correct
+  real<lower=0,upper=1> omega ;        // group mode
+  real<lower=0> kappaMinusTwo ;        // group concentration minus two
+}
+transformed parameters {
+real<lower=0> kappa ;  
+  kappa = kappaMinusTwo + 2 ;
+}
+model {
+  omega ~ beta( 1 , 1 ) ;
+  kappaMinusTwo ~ gamma( 0.01 , 0.01 ) ;
+  // kappaMinusTwo ~ gamma( 1.105125 , 0.1051249 ) ;  # mode=1 , sd=10 
+  theta ~ beta( omega*(kappa-2)+1 , (1-omega)*(kappa-2)+1 ) ; // vectorized
+  for ( i in 1:Ntotal ) {
+    y[i] ~ bernoulli( theta[s[i]] ) ;
+  }
+}
+" # close quote for modelString
+```
+
+```{r Initialize-chains}
+# INTIALIZE THE CHAINS.
+# Initial values of MCMC chains based on data:
+initsList = function() {
+  thetaInit = rep(0, Nsubj)
+  for (sIdx in 1:Nsubj) {
+    # for each subject
+    includeRows = (s == sIdx) # identify rows of this subject
+    yThisSubj = y[includeRows]  # extract data of this subject
+    resampledY = sample(yThisSubj , replace = TRUE) # resample
+    thetaInit[sIdx] = sum(resampledY) / length(resampledY)
+  }
+  thetaInit = 0.001 + 0.998 * thetaInit # keep away from 0,1
+  meanThetaInit = mean(thetaInit)
+  kappaInit = 100 # lazy, start high and let burn-in find better value
+  return(list(
+    theta = thetaInit ,
+    omega = meanThetaInit ,
+    kappaMinusTwo = kappaInit - 2
+  ))
+}
+```
+
+```{r Stan-parameters, results="hide"}
+# RUN THE CHAINS
+parameters = c("theta", "omega", "kappa") # The parameters to be monitored
+burnInSteps = 500            # Number of steps to burn-in the chains
+nChains = 4                  # nChains should be 2 or more for diagnostics
+numSavedSteps = 50000
+thinSteps = 1
+
+# Translate to C++ and compile to DSO:
+stanDso <- stan_model(model_code = modelString) 
+```
+
+## 2.2 Run the model
+
+If you observe convergence problems, try to understand the reason.
+
+**Hint**: There may be divergencies in Markov chains.
+```{r Stan-model}
+# Get MC sample of posterior:
+tic()
+stanFit <- sampling(
+  object = stanDso,
+  data = dataList,
+  # pars = parameters , # optional
+  chains = nChains,
+  iter = (ceiling(numSavedSteps / nChains) * thinSteps + burnInSteps),
+  warmup = burnInSteps,
+  thin = thinSteps,
+  init = initsList
+) # optional
+toc()
+```
+
+## 2.3 Analyze convergence
+```{r Bad-show-fit}
+show(stanFit)
+```
+
+## 2.4 Analyze results
+```{r Bad-summary}
+names(stanFit)
+summary(stanFit)
+```
+
+Trace shows $\kappa$ not overlapping.
+```{r Bad-trace}
+stan_trace(stanFit) +
+  scale_color_viridis_d() + 
+  theme(legend.position = "none")
+```
+
+There are serious auto-correlation issues with the model. The plots below illustrate that the chains get stuck in states. One fix may be to add thinning. Or maybe the model is not good at all. Moreover, modification may be needed for $\kappa$ to allow better chain convergence.
+```{r}
+stan_ac(stanFit, separate_chains = T)
+```
+
+Prior $\kappa$ is too small, which constricts likelihood and causes divergence issues. This is evident in the plots below. $\kappa$ is spiked — essentially flat. Note that in the `pairs()` plot each red dot represents a divergent point.
+```{r Bad-kappa}
+pairs(stanFit, pars = c("omega", "kappa"))
+stan_hist(stanFit)
+```
+
+# 3 How the model can be modified to improve convergence?
+
+**Hint:** Think about modifying prior distribution for $\kappa$.
+
+Model 2: $\kappa$ should be adjusted to be more flexible and appropriate, so likelihood can influence the posterior. In this case, we set the prior for $\kappa$ close to maximum likelihood. We expect the posterior to be bias and shrink towards the population.
+```{r Kappa-MLE}
+mu <- 23000
+sigma_squared <- 2000
+a <- mu^2 / sigma_squared
+b <- mu / sigma_squared
+
+cbind(a, b)
+```
+
+Model 3: And in this case, we set $\kappa$ prior weak, not as flat as the model 1. Nonetheless, it should be more flexible than the 
+```{r Kappa-small}
+mu <- 2
+sigma_squared <- 1.5
+a <- mu^2 / sigma_squared
+b <- mu / sigma_squared
+
+cbind(a, b)
+```
+
+```{r Modified-model}
+# THE MODEL.
+modelString_modified_MLE = "
+data {
+  int<lower=1> Nsubj ;
+  int<lower=1> Ntotal ;
+  int<lower=0,upper=1> y[Ntotal] ;
+  int<lower=1> s[Ntotal] ; // notice Ntotal not Nsubj
+}
+parameters {
+  real<lower=0,upper=1> theta[Nsubj] ; // individual prob correct
+  real<lower=0,upper=1> omega ;        // group mode
+  real<lower=0> kappaMinusTwo ;        // group concentration minus two
+}
+transformed parameters {
+real<lower=0> kappa ;  
+  kappa = kappaMinusTwo + 2 ;
+}
+model {
+  omega ~ beta( 1 , 1 ) ;
+  kappaMinusTwo ~ gamma( 264500 , 11.5 ) ; // mean = 23000, variance = 2000
+  // kappaMinusTwo ~ gamma( 1.105125 , 0.1051249 ) ;  # mode=1, sd=10 
+  theta ~ beta( omega*(kappa-2)+1 , (1-omega)*(kappa-2)+1 ) ; // vectorized
+  for ( i in 1:Ntotal ) {
+    y[i] ~ bernoulli( theta[s[i]] ) ;
+  }
+}
+" # close quote for modelString
+
+# THE MODEL.
+modelString_modified_small_kappa = "
+data {
+  int<lower=1> Nsubj ;
+  int<lower=1> Ntotal ;
+  int<lower=0,upper=1> y[Ntotal] ;
+  int<lower=1> s[Ntotal] ; // notice Ntotal not Nsubj
+}
+parameters {
+  real<lower=0,upper=1> theta[Nsubj] ; // individual prob correct
+  real<lower=0,upper=1> omega ;        // group mode
+  real<lower=0> kappaMinusTwo ;        // group concentration minus two
+}
+transformed parameters {
+real<lower=0> kappa ;  
+  kappa = kappaMinusTwo + 2 ;
+}
+model {
+  omega ~ beta( 1 , 1 ) ;
+  kappaMinusTwo ~ gamma( 2.666667 , 1.333333 ) ; // mean = 23000, variance = 2000
+  // kappaMinusTwo ~ gamma( 1.105125 , 0.1051249 ) ;  # mode=1, sd=10 
+  theta ~ beta( omega*(kappa-2)+1 , (1-omega)*(kappa-2)+1 ) ; // vectorized
+  for ( i in 1:Ntotal ) {
+    y[i] ~ bernoulli( theta[s[i]] ) ;
+  }
+}
+" # close quote for modelString
+```
+
+```{r Translate-Stan, results="hide"}
+# Translate to C++ and compile to DSO:
+stanDso_modified_MLE <- stan_model(model_code = modelString_modified_MLE) 
+stanDso_modified_kappa_small <- stan_model(model_code = modelString_modified_small_kappa) 
+```
+
+```{r Stan-model-modified}
+# Get MC sample of posterior:
+tic()
+stanFit_modified_MLE <- sampling(
+  object = stanDso_modified_MLE,
+  data = dataList,
+  # pars = parameters , # optional
+  chains = nChains,
+  iter = (ceiling(numSavedSteps / nChains) * thinSteps + burnInSteps),
+  warmup = burnInSteps,
+  thin = thinSteps,
+  init = initsList
+) # optional
+toc()
+
+tic()
+stanFit_modified_kappa_small <- sampling(
+  object = stanDso_modified_kappa_small,
+  data = dataList,
+  # pars = parameters , # optional
+  chains = nChains,
+  iter = (ceiling(numSavedSteps / nChains) * thinSteps + burnInSteps),
+  warmup = burnInSteps,
+  thin = thinSteps,
+  init = initsList
+) # optional
+toc()
+```
+
+## 3.1 Analyze Results
+Trace plots shows overlap across all chains for both models. 
+```{r Modified-trace}
+stan_trace(stanFit_modified_MLE) +
+  scale_color_viridis_d() + 
+  theme(legend.position = "none") +
+  labs(title = "Model Fit: Maximum Likelihood")
+
+stan_trace(stanFit_modified_kappa_small) +
+  scale_color_viridis_d() + 
+  theme(legend.position = "none") +
+  labs(title = TeX("Model Fit: Small $\\kappa$"))
+```
+
+```{r Modified-summary}
+names(stanFit_modified_MLE)
+summary(stanFit_modified_MLE)
+```
+
+Divergences no longer occurs in both new models. $\kappa$ distribution is normal after adjustment. $\omega$ shifted from uniform to normal as well.
+```{r MLE-modified-kappa-plot}
+pairs(stanFit_modified_MLE, pars = c("omega", "kappa"))
+stan_hist(stanFit_modified_MLE)
+```
+
+Distributions for $\omega$ and $\kappa$ have a positive skew, but not spiked and uniform like before, respectively. 
+```{r Kappa-small-plot}
+pairs(stanFit_modified_kappa_small, pars = c("omega", "kappa"))
+stan_hist(stanFit_modified_kappa_small)
+```
+
+`Treedepth` looks normal with no fatness near the bottom of the plot.  
+```{r Bad-model-tree-depth}
+stan_diag(stanFit_modified_MLE, information = "treedepth")
+stan_diag(stanFit_modified_kappa_small, information = "treedepth")
+```
+
+# 4 Using converging, model compare HDI of approval probabilities by male and female. Are they significantly different?
+
+Extract parameters $\theta$ for each tested individual.
+```{r Extract-thetas}
+Thetas_MLE <- rstan::extract(stanFit_modified_MLE, pars = names(stanFit_modified_MLE)[grep("theta", names(stanFit_modified_MLE))])
+Thetas_MLE <- matrix(unlist(Thetas_MLE), ncol = 2, byrow = F)
+colnames(Thetas_MLE) <- names(stanFit_modified_MLE)[grep("theta", names(stanFit_modified_MLE))]
+head(Thetas_MLE)
+
+Thetas_kappa_small <- rstan::extract(stanFit_modified_kappa_small, pars = names(stanFit_modified_kappa_small)[grep("theta", names(stanFit_modified_kappa_small))])
+Thetas_kappa_small <- matrix(unlist(Thetas_kappa_small), ncol = 2, byrow = F)
+colnames(Thetas_kappa_small) <- names(stanFit_modified_kappa_small)[grep("theta", names(stanFit_modified_kappa_small))]
+head(Thetas_kappa_small)
+```
+
+HDIs overlap slightly for MLE model, but are completely separate for small $\kappa$ model. When the resultant is unbiased, group means are more closely estimated. This accentuates the difference between the groups (no shrinkage).
+```{r Compare-HDI, fig.width=12}
+apply(Thetas_MLE, 2, function(z) hdi(z))
+apply(Thetas_kappa_small, 2, function(z) hdi(z))
+
+plot(stanFit_modified_MLE, pars = "theta")
+plot(stanFit_modified_kappa_small, pars = "theta")
+
+plot_MLE <- as_tibble(Thetas_MLE) %>% 
+  gather(key = parameter, value = estimate) %>% 
+  ggplot(aes(estimate, fill = parameter)) +
+  geom_density(color = "light grey", alpha = .85) +
+  scale_fill_brewer(type = "qual", palette = 2, 
+                    name = "Parameter", labels = c("Theta 1", "Theta 2")) +
+  labs(title = TeX("MLE Model: Minor Overlap Between $\\theta$'s"),
+       x = NULL,
+       y = NULL) +
+  ggthemes::theme_tufte() +
+  theme(legend.position = "None") 
+
+plot_kappa_small <- as_tibble(Thetas_kappa_small) %>% 
+  gather(key = parameter, value = estimate) %>% 
+  ggplot(aes(estimate, fill = parameter)) +
+  geom_density(color = "light grey", alpha = .85) +
+  scale_fill_brewer(type = "qual", palette = 2, 
+                    name = "Parameter", labels = c("Theta 1", "Theta 2")) +
+  labs(title = TeX("Small $\\kappa$ Model with No Overlap: $\\theta$'s Significantly Different"),
+       x = NULL,
+       y = NULL) +
+  ggthemes::theme_tufte() +
+  theme(legend.position = "None")
+
+legend <- gtable::gtable_filter(ggplot_gtable(ggplot_build(plot_MLE + theme(legend.position = "bottom"))), "guide-box")
+
+gridExtra::grid.arrange(plot_MLE, plot_kappa_small, left = "Density", bottom = "Estimate", top = legend, ncol = 2)
+```
+
+# 4 Find the mean of mode of distribution of approval rate by population $\omega$. Compare it with raw estimate.
+```{r Mean-mode-omega}
+MLE_Omega <- rstan::extract(stanFit_modified_MLE, pars = names(stanFit_modified_MLE)[grep("omega", names(stanFit_modified_MLE))])
+MLE_Omega <- matrix(unlist(MLE_Omega), ncol = 1, byrow = F)
+colnames(MLE_Omega) <- names(stanFit_modified_MLE)[grep("omega", names(stanFit_modified_MLE))]
+head(MLE_Omega)
+
+(MLE_model_omega <- mean(MLE_Omega))
+(MLE_raw_omega_mean <-  1 / (1 + 1))
+
+kappa_small_Omega <- rstan::extract(stanFit_modified_kappa_small, pars = names(stanFit_modified_kappa_small)[grep("omega", names(stanFit_modified_kappa_small))])
+kappa_small_Omega <- matrix(unlist(kappa_small_Omega), ncol = 1, byrow = F)
+colnames(kappa_small_Omega) <- names(stanFit_modified_kappa_small)[grep("omega", names(stanFit_modified_kappa_small))]
+head(kappa_small_Omega)
+
+(kappa_small_model_omega <- mean(kappa_small_Omega))
+(kappa_small_raw_omega_mean <-  1 / (1 + 1))
+```
+
+Raw $\omega$ is much different than the prior.
+
+# 5 Find the means of approval probabilities by males and by females. Compare them with raw estimates. Do you observe shrinkage?
+
+Shrinkage is apparent in MLE model as the posterior estimates are much closer to the grand mean:
+```{r Gender-mean}
+# Model
+MLE_posterior <- as_tibble(apply(Thetas_MLE, 2, mean)) %>% 
+  mutate(sex = c("Male", "Female"), 
+         data = "posterior MLE") %>% 
+  rename(prop = value)
+
+kappa_small_posterior <- as_tibble(apply(Thetas_kappa_small, 2, mean)) %>% 
+  mutate(sex = c("Male", "Female"), 
+         data = "posterior kappa small") %>% 
+  rename(prop = value)
+
+# Data
+raw_data <- data.frame(y = y, sex = s) %>% 
+  group_by(sex) %>% 
+  summarise(prop = mean(y)) %>% 
+  ungroup() %>%
+  mutate(sex = ifelse(sex == 1, "Male", "Female"),
+         data = "data")
+
+(plot_data <- bind_rows(MLE_posterior, kappa_small_posterior, raw_data) %>% 
+  mutate(grand_mean = raw_data %>% summarise(grand_mean = mean(prop)) %>% pull(),
+         shrinkage = prop - grand_mean))
+
+  
+plot_data %>% 
+  ggplot() +
+  ggrepel::geom_label_repel(aes(prop, shrinkage, color = data, label = sex)) +
+  # geom_text(aes(prop, shrinkage, color = data, label = sex)) +
+  geom_text(data = data.frame(shrinkage = 0, grand_mean = plot_data$grand_mean), aes(grand_mean, shrinkage, label = "Grand Mean")) +
+  scale_color_brewer(type = "qual", palette = 2, 
+                     name = NULL) +
+  labs(title = "Evident Shrinkage in Posterior",
+       x = "Success Proportion",
+       y = "Shrinkage") +
+  theme(legend.position = "top")
+```
+
+However, we see no shrinkage in small $\kappa$ model. The result is unbiased estimates closer to the data group means.
+
+# 6 Summary
+The exercise included fitting three models that focused on hyper parameterizing with $\kappa$ ($\omega$ was uniform): 
+
+* Model 1: $\kappa$ was given an infinitesimal prior, which constricted the influence of the data on the posterior. As a result, many divergences occurred in the Markov chains. In essence, the chains experienced incessant rejections
+
+* Model 2: $\kappa$ was given a strong prior centered around moments that described the data (total number of subjects), and parameterized by a gamma distribution. The parameterization removed divergences; however, estimates were biased towards the grand mean. This result may be acceptable depending on the objective of the study: population behavior or group behavior?
+
+* Model 3: $\kappa$ was given a weaker prior than model 2 to explore unbiased estimates and group behavior closer. In this model, we observed no overlap in densities of probability of success for `sex`, while model 2 showed minor overlap due to shrinkage
+
+
+
+
+
+
+
+
+
 

@@ -1,0 +1,89 @@
+---
+title: "Review Session 6"
+author: "Joshua Goldberg"
+date: "`r format(Sys.time(), '%B, %d %Y')`"
+always_allow_html: yes
+output:
+  github_document: 
+  pdf_document: default
+editor_options: 
+  chunk_output_type: inline
+---
+
+```{r Global-options, include=FALSE}
+knitr::opts_chunk$set(fig.width=6, fig.height=4, fig.path='Figs/',
+                      warning=FALSE, message=FALSE, cache=TRUE)
+```
+
+```{r Preamble, echo=FALSE}
+# Enter package in p_load()
+# If package is not installed, p_load() will install and load the package
+if(!"pacman" %in% rownames(installed.packages())) {
+  install.packages("pacman")
+  }
+pacman::p_load(tidyverse, ggthemes, here, rstan, foreign, HDInterval, tictoc, furrr, latex2exp)
+
+# Set default ggplot theme to tufte
+theme_set(ggthemes::theme_tufte())
+```
+
+```{r Copy-files, echo=FALSE, eval=FALSE}
+# Enter files to load to project directory in from = "~/Downloads/your_file_name_here"
+file.copy(from = "~/Downloads/", to = here::here(), 
+          overwrite = TRUE, recursive = FALSE, 
+          copy.mode = TRUE)
+```
+
+```{r}
+child_data <- read.dta("ARM_Data/child.iq/kidiq.dta")
+```
+
+```{r}
+child_data
+```
+
+```{r}
+heights_data <- read.dta("ARM_Data/earnings/heights.dta")
+heights_data %>% head()
+```
+
+```{r}
+h_clean <- heights_data %>% na.omit() %>% filter(earn != 0)
+```
+
+```{r}
+# normal prior on beta is similar to ridge regression
+# laplace prior gives lasso 
+
+writeLines(readLines("model_h_stan.text"))
+```
+
+```{r}
+N <- nrow(h_clean)
+earn <- h_clean$earn
+height <- h_clean$height
+```
+
+```{r}
+stan_rdump(c("N", "earn", "height"), file = "heights.data.R")
+data <- read_rdump("heights.data.R")
+map(data, ~ head(.x))
+```
+
+```{r}
+fit <- stan(file = "review_session_model1.stan", data = data, seed = 1)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+

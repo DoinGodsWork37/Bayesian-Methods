@@ -338,16 +338,14 @@ metropolis_grid(
 )
 ```
 
-```{r Animate, gganimate = list(nframes = 200, fps = 30, device = "svg", duration = 30), eval=FALSE}
-runs <- 1:8
-iterations <- 25000
+```{r Animate, eval=FALSE, dpi=800}
+runs <- 1:3
+iterations <- 500
 sd <- .1032424
 dat <- multi_start(runs = runs, iteration = iterations, sd = sd)
 
-a <- dat$plot_data %>%
+dat$plot_data %>%
   group_by(run) %>% 
-  mutate(step = as.numeric(row_number())) %>%
-  .[complete.cases(.), ] %>% 
   ggplot(aes(x1, x2, color = run)) +
   geom_point(size = 2.5) +
   geom_label(data = dat$start, aes(x1, x2, label = glue::glue("Start {run}")), size = 2.5) +
@@ -358,13 +356,31 @@ a <- dat$plot_data %>%
        subtitle = glue::glue("Accepted Proposal Path Random Starts: {length(runs)}
                              Standard devation: {sd}")) 
 
-animate(a)
-ggsave("markov_chain_monte_carlo.png", width = 6, height = 4)
 
-rerun(10, dat$plot_data %>%
+a <- dat$plot_data %>%
   group_by(run) %>% 
-  mutate(step = as.numeric(row_number()))) %>%
-  bind_rows() %>%
+  mutate(step = as.numeric(row_number())) %>%
+  .[complete.cases(.), ] %>% 
+  ggplot(aes(x1, x2, color = run, frame = step)) +
+  geom_point(size = 2.5) +
+  scale_color_colorblind(guide = FALSE) +
+  labs(title = glue::glue("Metropolis Rule: Normal Bivariate Distribution
+                Steps: {scales::comma(iterations)}"),
+       subtitle = glue::glue("Accepted Proposal Path Random Starts: {length(runs)}
+                             Standard devation: {sd}")) +
+  # transition_time(step) +
+  # ease_aes("linear")
+  NULL
+
+# Create plotly graph
+ggplotly(a) %>%
+  animation_opts(frame = 20,
+                 easing = "linear",
+                 redraw = FALSE)
+
+a <- dat$plot_data %>%
+  group_by(run) %>% 
+  mutate(step = as.numeric(row_number())) %>%
   .[complete.cases(.), ] %>% 
   ggplot(aes(x1, x2, color = run)) +
   geom_point(size = 2.5) +
@@ -376,6 +392,8 @@ rerun(10, dat$plot_data %>%
   transition_time(step) +
   ease_aes("linear")
 
-gganimate::save_animation(gganimate::last_animation(), "markov_chain_monte_carlo.gif")
+animate(a, nframes = 400, fps = 50, renderer = magick_renderer())
+
+gganimate::save_animation(gganimate::last_animation(), "markov_chain_monte_carlo3.gif")
 ```
 

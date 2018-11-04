@@ -1,0 +1,92 @@
+---
+title: "Week 6: Homework Assignment"
+author: "Joshua Goldberg"
+date: "`r format(Sys.time(), '%B, %d %Y')`"
+output:
+  html_document:
+    theme: united
+    df_print: paged
+    highlight: textmate
+    code_folding: show
+    toc: true
+    toc_float: true
+editor_options:
+  chunk_output_type: inline
+always_allow_html: yes
+---
+
+```{r Global-options, include=FALSE}
+knitr::opts_chunk$set(fig.width=6, fig.asp=.618, fig.align="center",
+                      fig.path="Figs/",
+                      warning=FALSE, message=FALSE, cache=TRUE)
+```
+
+```{r Preamble, echo=FALSE}
+# Enter package in p_load()
+# If package is not installed, p_load() will install and load the package
+if(!"pacman" %in% rownames(installed.packages())) {
+  install.packages("pacman")
+  }
+pacman::p_load(tidyverse, ggthemes, here, rstan, HDInterval, tictoc, furrr, latex2exp, quantmod)
+
+# Set default ggplot theme to tufte
+theme_set(ggthemes::theme_tufte())
+
+# Parallel Stan
+rstan_options(auto_write = TRUE)
+options(mc.cores = parallel::detectCores())
+```
+
+```{r Copy-files, echo=FALSE, eval=FALSE}
+# Enter files to load to project directory in from = "~/Downloads/your_file_name_here"
+file.copy(from = "~/Downloads/", to = here::here(), 
+          overwrite = TRUE, recursive = FALSE, 
+          copy.mode = TRUE)
+```
+
+Consider daily simple returns of AAPL, which, for example, can be obtained as:
+```{r}
+getSymbols("AAPL", from = "2015-1-1", to = "2015-12-31")
+```
+
+The data are in the file `AAPL_2015.csv` 
+```{r}
+AAPL.1.day <- as.matrix(AAPL)
+AAPL.returns.2015 <- diff(AAPL.1.day[, 6])
+```
+
+```{r}
+AAPL.ret <- read_csv("documents-MScA Bayesian Methods (32014)-MScA 32014 Lecture 7-AAPL_2015.csv")
+(AAPL.ret)
+```
+
+Visualize the distribution of the returns.
+```{r}
+data.frame(returns = AAPL.returns.2015) %>%
+  ggplot() +
+  geom_density(aes(returns)) +
+  geom_line(data = data.frame(x = AAPL.dens$x, y = dnorm(AAPL.dens$x,mean(AAPL.ret$x),sd(AAPL.ret$x))), aes(x, y), stat = "identity", color = "red") +
+  labs(title = "Returns Distribution",
+       x = "Returns",
+       y = "Density")
+```
+
+Using the methods of the workshop estimate parameters of normal model and robust normal model for the Apple returns.
+
+Estimate realized arithmetic volatility of Apple returns using both normal and robust models.
+
+Volatility is calculated as: $$\sigma=Sd\sqrt{365},$$ where $Sd$ is standard deviation of daily arithmetic returns $S(t)−S(t−1)$, $S(t)$ is stock price.
+
+```{r}
+
+```
+
+
+
+
+
+
+
+
+
+

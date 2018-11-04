@@ -511,8 +511,3 @@ list.samplers(jagsModel)
 ```{r}
 head(codaSamples)
 ```
-
-
-
-
-

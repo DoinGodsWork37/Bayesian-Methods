@@ -1,0 +1,136 @@
+---
+title: "Workshop 6.2"
+author: "Joshua Goldberg"
+date: "`r format(Sys.time(), '%B, %d %Y')`"
+always_allow_html: yes
+output:
+  github_document: 
+  pdf_document: default
+editor_options: 
+  chunk_output_type: inline
+---
+
+```{r Global-options, include=FALSE}
+knitr::opts_chunk$set(fig.width=6, fig.height=4, fig.path='Figs/',
+                      warning=FALSE, message=FALSE, cache=TRUE)
+```
+
+```{r Preamble, echo=FALSE}
+# Enter package in p_load()
+# If package is not installed, p_load() will install and load the package
+if(!"pacman" %in% rownames(installed.packages())) {
+  install.packages("pacman")
+  }
+pacman::p_load(tidyverse, ggthemes, here)
+
+# Set default ggplot theme to tufte
+theme_set(ggthemes::theme_tufte())
+```
+
+```{r Copy-files, echo=FALSE, eval=FALSE}
+# Enter files to load to project directory in from = "~/Downloads/your_file_name_here"
+file.copy(from = "~/Downloads/", to = here::here(), 
+          overwrite = TRUE, recursive = FALSE, 
+          copy.mode = TRUE)
+```
+
+# 2 Review of MCMC: binomial model
+
+## 2.1 Data
+Create vector of zeros and ones of length $k=20$ and probability of success $\theta=0.6$
+```{r}
+set.seed(9374)
+Y <- rbinom(20, size = 1, p = .6)
+```
+
+## 2.2 Running MCMC
+Recall that Metropolis-Hastings MCMC algorithm consists of the following steps:
+
+### 2.2.1 Generate new proposal using some convenient distribution.
+Typically new proposals are generated from Gaussian distribution centered at the current value of Markov chain with sufficiently small variance. Write a function for new proposals `proposalFun <- function(oldTheta)` which simulates newTheta from Gaussian distribution with mean value oldTheta and fixed standard deviation of small enough level to generate reasonable proposals for $\theta$ between 0 and 1.
+
+It is recommended to truncate the proposed values between extreme levels of, for example, 0.01 and 0.99 to prevent values exactly at 0 and 1.
+```{r}
+generate_proposal <- function(oldTheta, tuneSigma = .1) {
+  newTheta <- rnorm(1, mean = oldTheta, sd = tuneSigma)
+  newTheta <- min(.99, newTheta)
+  newTheta <- max(.01, newTheta)
+  newTheta
+}
+```
+
+### 2.2.2 Decide whether the proposal `newTheta` is accepted or rejected.
+```{r}
+binomialLikelihood <- function(Theta, mySample) {
+  prod(dbinom(mySample, 1, Theta))
+}
+
+binomialPrior <- function(Theta, A, B) {
+  dbeta(Theta, A, B)
+}
+```
+
+```{r}
+metropolisRule <- function(thetaOld, thetaNew, mySample, funLikelihood, funPrior) {
+  dec_value <- (funLikelihood(thetaNew, mySample) * funPrior(thetaNew, priorParam[[1]], priorParam[[2]])) /
+    (funLikelihood(thetaOld, mySample) * funPrior(thetaOld, priorParam[[1]], priorParam[[2]]))
+  
+  dec_value <- min(1, dec_value)
+  
+  if(runif(1) <= dec_value) {
+    acceptance <- FALSE
+  } else {
+    acceptance <- TRUE
+  }
+  acceptance
+}
+```
+
+### 2.2.3 Initiate parameters
+When all functions are prepared initiate necessary parameters:
+```{r}
+# Initiate
+chainMax <- 500               # length of Markov chain
+Chain <- numeric(0)           # empty vector for the chain
+Rejected <- numeric(0)        # empty vector for rejected values
+chainLength <- length(Chain)  # current length of chain
+tuneSigma <- .1               # standard deviation of proposal distribution
+priorParam <- c(A = 10, B = 10)    # parameters of prior beta distribution
+ThetaOld <- .5                # initial Theta
+```
+
+### 2.2.4 Run MCMC
+Run loop until number of accepted values in Chain reaches `chainMax`.
+In this loop:
+
+* Generate new proposal `ThetaNew`
+
+* Apply Metropolis decision rule. If new proposal is accepted add it to `Chain` and increase `chainLength`, then reset `ThetaOld` to `ThetaNew`. If new proposal is rejected then add it to vector `Rejected`
+
+```{r}
+while(chainLength < 500) {
+  Chain <- numeric(0)           # empty vector for the chain
+  Rejected <- numeric(0)        # empty vector for rejected values
+  i <- 1
+  
+  new_proposal <- generate_proposal(ThetaOld, tuneSigma = tuneSigma)
+  accept <- metropolisRule(thetaOld = ThetaOld, new_proposal, Y, binomialLikelihood, binomialPrior)
+  
+  if (accept) {
+    Chain[i] <- new_proposal
+  } else {
+    Rejected[i] <- new_proposal
+  }
+  
+  i <- i + 1
+  chainLength <- length(Chain)
+  
+}
+```
+
+
+
+
+
+
+

@@ -1,0 +1,749 @@
+---
+title: "Workshop 6.1"
+author: "Joshua Goldberg"
+date: "`r format(Sys.time(), '%B, %d %Y')`"
+always_allow_html: yes
+output:
+  github_document: 
+  pdf_document: default
+editor_options: 
+  chunk_output_type: inline
+---
+
+```{r Global-options, include=FALSE}
+knitr::opts_chunk$set(fig.width=6, fig.asp=.618, fig.align="center", fig.path='Figs/',
+                      warning=FALSE, message=FALSE, cache=TRUE)
+```
+
+```{r Preamble, echo=FALSE}
+# Enter package in p_load()
+# If package is not installed, p_load() will install and load the package
+if(!"pacman" %in% rownames(installed.packages())) {
+  install.packages("pacman")
+  }
+pacman::p_load(tidyverse, ggthemes, here, rjags, rstan)
+
+# Parallel Stan
+rstan_options(auto_write = TRUE)
+options(mc.cores = parallel::detectCores())
+
+# Set default ggplot theme to tufte
+theme_set(ggthemes::theme_tufte())
+```
+
+```{r Copy-files, echo=FALSE, eval=FALSE}
+# Enter files to load to project directory in from = "~/Downloads/your_file_name_here"
+file.copy(from = "~/Downloads/", to = here::here(), 
+          overwrite = TRUE, recursive = FALSE, 
+          copy.mode = TRUE)
+```
+
+# 1 Fitting normal model for 1 group with no predictors
+This example is based on [K], Chapter 16.
+
+In this example we just need to estimate both parameters of normal distribution for random variable y.
+The diagram of the model structure shows how the model needs to be coded.
+
+Prepare the data.
+```{r}
+# preparing data
+set.seed(9384756)
+y <- rnorm(100, mean = 6, sd = 3)
+Ntotal = length(y)
+```
+
+Create a data list, include sample mean and standard deviation in it.
+```{r}
+dataList = list(
+  y = y ,
+  Ntotal = Ntotal ,
+  mean_mu = mean(y) ,
+  sd_mu = sd(y)
+)
+```
+
+## 1.1 Running in JAGS
+Specify the model. Recall that in JAGS normal distribution is specified by precision 1$\sigma^2$ instead of standard deviation or variance.
+Select an uninformative prior for $\sigma$ and normal (conjugate) prior for $\mu$.
+
+**What do you suggest as parameters of the normal distribution got $\mu$ based on the sample?** Mean value of the sample seems reasonable because it will not be biased. For $\sigma$ prior, we look at variance [ 1 / n sum(x_i])] = 1 / n^2 sum(1:n) V[x_i] = 1 / n2 sum(1:n) $\sigma_x^2 = \frac{\sigma_x^2}{n}$. we do not want too narrow of prior around this. We need to make our prior $\sigma$ larger than this, maybe 10 or 100x larger.
+```{r}
+mean_mu_sd <- (dataList$sd_mu / dataList$Ntotal)^2 * 10000
+modelString = "
+  model {
+    for ( i in 1:Ntotal ) {
+      y[i] ~ dnorm( mu , 1/sigma^2 )
+    }
+#   mu ~ dnorm(mean_mu , 1/(100*sd_mu)^2)
+    mu ~ dnorm(mean_mu , Ntotal/sd_mu^2)
+    sigma ~ dunif( sd_mu/1000 , sd_mu*1000 )
+  }
+  " # close quote for modelString
+# Write out modelString to a text file
+writeLines(modelString , con = "TEMPmodel.txt")
+```
+
+$\sigma$ of prior $\mu$ is 
+`#   mu ~ dnorm(mean_mu , 1/(100*sd_mu)^2) mu ~ dnorm(mean_mu , Ntotal/sd_mu^2)`.
+
+In **JAGS** we start in the bottom, so we describe distribution of response. That is typically described as a loop in **JAGS**. In **JAGS**, we describe model distirbution and however many parameters the model has priors are required. 
+
+    1.  `for ( i in 1:Ntotal ) { y[i] ~ dnorm( mu , 1/sigma^2 )}`. **JAGS** uses R functions to describe parameters. We have $\mu$ and $\sigma$, so we provide in step 2.
+
+    1. `mu ~ dnorm(mean_mu , Ntotal/sd_mu^2)` or `mu ~ dnorm(mean_mu , 1/(100*sd_mu)^2)` center around maximum likelihood estimate. Make distribution wider so it's less informative.
+
+    1. `sigma ~ dunif( sd_mu/1000 , sd_mu*1000 )`. We give no infromation for $\sigma$ by using `dunif`. Uniform is non-informative. Gamma would be informative (a lot more dense), and then we will have to work around it similar to the homework $\kappa$ problem. 
+    
+Initialize chains. We modified `m` and `s` so we move away from MLE. This function is called every time **JAGS** starts new markov chain
+```{r}
+initsList <- function() {
+  upDown <- sample(c(1, -1), 1)
+  m <- mean(y) * (1 + upDown * .05)
+  s <- sd(y) * (1 - upDown * .1)
+  list(mu = m , sigma = s)
+}
+```
+
+Run the chains.
+
+    1. Set parameters: Generates 50,000 pairs for $\mu$ and $\sigma$.
+```{r}
+parameters = c("mu" , "sigma")     # The parameters to be monitored
+adaptSteps = 500               # Number of steps to "tune" the samplers
+burnInSteps = 1000             # burn in before collecting
+numSavedSteps = 50000
+nChains = 4
+thinSteps = 1                  # no thinning
+nIter = ceiling((numSavedSteps * thinSteps) / nChains) # thinning would require multiplication by the thinning
+# Create, initialize, and adapt the model:
+```
+
+    1. Send model to **JAGS**:
+```{r}
+jagsModel <- jags.model(
+  "TEMPmodel.txt" ,
+  data = dataList ,
+  inits = initsList ,
+  n.chains = nChains ,
+  n.adapt = adaptSteps
+)
+```
+
+    1. Burn in and run:
+```{r}
+# Burn-in:
+update(jagsModel , n.iter = burnInSteps)
+
+# Run it
+# The saved MCMC chain:
+codaSamples = coda.samples(
+  jagsModel ,
+  variable.names = parameters ,
+  n.iter = nIter ,
+  thin = thinSteps
+)
+```
+
+Check how chains converged. First observation is 1501 because we start with 1000 burn-ins. Summary returns distribution of all chains combined. $\mu$ is mean value for the entire simulated sample.
+```{r}
+summary(codaSamples)
+```
+
+The parameters are estimated close to what we simulated and very similar to what point estimation would give.
+```{r}
+# MLE
+mean(y)
+sd(y)
+```
+
+The plot of the samples and the densities of the parameters.
+```{r}
+plot(codaSamples)
+```
+
+Plot autocorrelations. May need thinning and to re-run the model of convergence is bad. If the model was more complex, auto-correlation could hurt convergence. In such cases may need to introduce thinning or rethink the model. If we propose with bad priors, we may too frequently reject the proposal.
+```{r}
+autocorr.plot(codaSamples, ask = F)
+```
+
+Autocorrelation function plot shows that standard deviation effective size must be pretty small.
+Indeed:
+```{r}
+effectiveSize(codaSamples)
+```
+
+$\mu$ is 50,000. $\sigma$ is almost half of that. If we have auto-correlation, convergence can slow down (but not in this case).
+
+Shrink factor shows that even with long memory for standard deviation distributions converged:
+```{r}
+gelman.diag(codaSamples)
+```
+
+Rule of thumb: 1.2 for convergence with **JAGS**. Black line and red line below rule of thumb. 
+```{r}
+gelman.plot(codaSamples)
+```
+
+Observed HDIs of the chains: they are reasonably wide.
+```{r}
+lapply(codaSamples, function(z) hdi(as.matrix(z)))
+```
+
+**Schools of thought**
+
+* Make initial positions far from MLE: here we do not do that
+
+* Or use information and make it easier for convergence
+
+* If you have more complex space and do not know where modes are, it is better it distribute widely (don't look at MLE because that will put you near the model)
+
+* If you have not found, add more chains and run one more time
+
+* Gelman school: should not be pre-conditioned, should be far as possible from MLE
+
+* Cruskey: put near MLE
+
+* If you believe model is simple enough, you do not have to go far apart
+
+* If you want to discover maximum modes, you have to start in different places
+
+* If we have orphans in the iterations (there may be three chains in same place but chain number 4 above or below)
+
+* If we do not see orphans, next time do less than 5% to make initial different (or make the burn-in period shorter) because model has good convergence
+
+* If you pre-condition, could result in bias estimates
+
+## 1.2 Running in Stan
+Use the description for Stan from file "ch16_1.stan" or write it yourself and compare with the code.
+
+* Response: metric number with y[Ntotal] vector of length Ntotal
+
+* real `mean_mu`: in data so we put it here (because we decided to include in the data)
+ 
+* real `sd_mu`: in data so we put it here with same exact names
+
+* If you do not show brackets, then it is a scalar
+
+* We need to do transformations to the data:
+
+* We declare first: real unifLo; real unifHi; real normalSigma
+
+* Then transform `unifLo = sd_mu/100`; `unifHi = sd_mu*100`; `normalSigma = sd_mu*100`; // 100*10 times larger than MLE;
+
+* Parameters we want back
+
+* Model description from top to bottom: in **Stan** we describe parameter then use it
+
+* `sigma ~ uniform(unifLo, unifHi)`; `mu ~ normal(mean_mu, normalSigma)`; `y ~ normal(mu, sigma)`
+
+```{r}
+modelString = "
+data {
+    int<lower=1> Ntotal;
+    real y[Ntotal];
+    real mean_mu;
+    real sd_mu;
+}
+transformed data {
+    real unifLo;
+    real unifHi;
+    real normalSigma;
+    unifLo = sd_mu/100;
+    unifHi = sd_mu*100;
+    normalSigma = sd_mu*100;  // 100*10 times larger than MLE
+}
+parameters {
+    real mu;
+    real<lower=0> sigma;
+}
+model {
+    sigma ~ uniform(unifLo, unifHi);
+    mu ~ normal(mean_mu, normalSigma); 
+    y ~ normal(mu, sigma);
+}
+" # close quote for modelString
+```
+
+Create a DSO and save it to disk to reuse later or just keep it in memory.
+```{r results="hide"}
+stanDso <- stan_model(model_code = modelString)
+```
+
+Run chains by either using the existing DSO:
+```{r}
+stanFit <- sampling(
+  object = stanDso ,
+  data = dataList ,
+  pars = c('mu', 'sigma'),
+  chains = 2,
+  cores = 2,
+  iter = 5000,
+  warmup = 200,
+  thin = 1
+)
+```
+
+Or alternatively, use the description of the model saved in "ch16_1.stan" directly:
+```{r}
+# fit model
+fit <- stan (
+  file = "documents-MScA Bayesian Methods (32014)-MScA 32014 Lecture 7-ch16_1.stan",
+  data = list(
+    Ntotal = length(y),
+    y = y,
+    meanY = mean(y),
+    sdY = sd(y)
+  ),
+  pars = c('mu', 'sigma'),
+  #control=list(adapt_delta=0.99),
+  iter = 5000,
+  chains = 2,
+  cores = 2
+)
+```
+
+Objects fit and stanFit should return very similar results. The difference between `stan()` and `sampling()` is in the argument object which is DSO. If you expect to repeat same calculations with different data compiling a DSO and reusing it with `sampling()` is faster.
+
+`se_mean` is the mean value of the Monte Carlo (probably due to rounding).
+```{r}
+# text statistics:
+print (stanFit)
+```
+
+```{r}
+# estimates & hdi:
+plot(stanFit)
+```
+
+```{r}
+# samples
+traceplot(stanFit, ncol = 1, inc_warmup = F)
+```
+
+Nothing interesting here. They don't see to be dependent on each other.
+```{r}
+pairs(stanFit, pars = c('mu', 'sigma'))
+```
+
+```{r}
+stan_scat(stanFit, c('mu', 'sigma'))
+```
+
+```{r}
+stan_hist(stanFit)
+```
+
+```{r}
+stan_dens(stanFit)
+```
+
+If we have auto-correlation, sometimes it helps to go from **JAGS** to **Stan**. **Stan** deals with these complex shapes better. But in this case, auto-correlation does not present a problem because convergence was fine.
+```{r}
+# autocorrelation:
+stan_ac(stanFit, separate_chains = T)
+```
+
+Extracts markov chains from **Stan** and turns into format of coda (same format as **JAGS**). Now we can analyze as if we are analyzing **JAGS**.
+```{r}
+# or you can work with familiar coda class:
+library(coda)
+stan2coda <- function(fit) {
+    # apply to all chains
+    mcmc.list(lapply(1:ncol(fit), function(x) mcmc(as.array(fit)[,x,])))
+}
+codaSamples <- stan2coda(stanFit)
+summary(codaSamples)
+```
+
+**Stan** by default returns the density of the log posterior distribution.
+```{r}
+plot(codaSamples)
+```
+
+```{r}
+autocorr.plot(codaSamples) 
+```
+
+```{r}
+effectiveSize(codaSamples)
+```
+
+```{r}
+gelman.diag(codaSamples)
+```
+
+```{r}
+gelman.plot(codaSamples)
+```
+
+We have theoretical and posterior. 
+```{r}
+plot(density(codaSamples[[1]][, 1]),
+     xlim = c(0, 8),
+     ylim = c(0, 3))  # mu, 1st chain
+lines(density(codaSamples[[1]][, 2]))                         # sigma, 1st chain
+lines(density(codaSamples[[2]][, 1]), col = "red")               # mu, 2nd chain
+lines(density(codaSamples[[2]][, 2]), col = "red")               # sigma, 2nd chain
+```
+
+Or you can use shinystan to do similar analysis of fitted model:
+
+```{r, evalu=FALSE}
+library(shinystan)
+launch_shinystan(fit)
+```
+
+We simulted Gaussian distribution with one mean value and standard deviation
+
+Robust will use t-distribution. So we create fat tail data first.
+
+# 2 Robust estimation using t-distribution
+Create a sample with heavy tails in order to check robust estimation of parameters of normal distribution. You may remember this simulation of leprtokurtic distribution from Statistical Analysis (31007).
+
+Each cycle simulates with different standard deviations. As a result, we have a composite sample containing sub-samples that are perfectly Gaussian with different standard deviation and combine with one sample to gurantee leptokurtic distribution. This makes fat tails.
+
+```{r}
+nSample <- 1000
+sd.Values <- c(2, 3.4, .8, 2.6)
+sd.process <- rep(c(
+  rep(sd.Values[1], 50),
+  rep(sd.Values[2], 75),
+  rep(sd.Values[3], 75),
+  rep(sd.Values[4], 50)
+),
+4)
+
+plot(sd.process, type = "l")
+```
+
+Variable sd.process is a deterministically changing standard deviation.
+Simulating perfect normal and independent realizations with such different standard deviations make a leptokurtic distribution.
+```{r}
+set.seed(1112131415)
+
+y <- rnorm(nSample) * sd.process
+y <- y[1:300]
+plot(y, type = "l")
+```
+
+Leptokurtic has more observations in the middle, but also more extreme data (outliers). So now we have good reason to use more robust model than Gaussian.
+```{r}
+den <- density(y)
+plot(den)
+lines(den$x, dnorm(den$x, mean(y), sd(y)), col = "red")
+```
+
+Robust models and fat tail models, best distribution is student-t distribution.
+sum of squares of standard normal is chi-squared. Distributed as z / chi^2
+
+Gamma is only parameter of t-distribution. And it has fat-tail distribution because the the denominator. Higher degrees of freedom for t-distribution converges to Gaussian.
+
+Gamma equals one becomes cauchy. 
+
+
+Three parameters: mu (same as Gaussian), sigma (same as Gaussian), gamma (takes care of the tails).
+
+Density plot clearly shows fat tails that will be most likely identified as outliers under the assumption of normal distribution.
+
+```{r}
+Ntotal = length(y)
+```
+
+Create data list.
+```{r}
+dataList = list(
+  y = y ,
+  Ntotal = Ntotal ,
+  mean_mu = mean(y) ,
+  sd_mu = sd(y)
+)
+```
+
+## 2.1 JAGS
+Describe the model in **JAGS**.
+
+Two changes
+
+* dt() instead of dnorm()
+
+* Make $\sigma$ uninformative
+
+* dexp() Make concentration as close to zero as possible to allow fat tails, but at the same time want fat tails on the right to allow it to be Gaussian to expand between 0 and 1; very convenient
+
+* $\sigma$ cannot go to zero but exponential can; instead of $\mu$ do $\mu-1$, which can go to zero; but it is a low probability so we do not do it here
+```{r}
+modelString = "
+model {
+for ( i in 1:Ntotal ) {
+    y[i] ~ dt(mu,1/sigma^2,nu)
+}
+mu ~ dnorm( mean_mu , 100/sd_mu^2 )
+sigma ~ dunif( sd_mu/1000 , sd_mu*1000 )
+nu ~ dexp(1/30.0)
+}
+  " # close quote for modelString
+# Write out modelString to a text file
+writeLines(modelString , con = "TEMPmodel.txt")
+```
+
+Initialize the model with MLE.
+```{r}
+initsList <- function() {
+  upDown <- sample(c(1, -1), 1)
+  m <- mean(y) * (1 + upDown * .05)
+  s <- sd(y) * (1 - upDown * .1)
+  list(mu = m , sigma = s, nu = 2)
+}
+```
+
+Transport the model to **JAGS**.
+```{r}
+parameters = c("mu" , "sigma" , "nu")     # The parameters to be monitored
+adaptSteps = 500               # Number of steps to "tune" the samplers
+burnInSteps = 1000
+nChains = 3
+thinSteps = 1
+numSavedSteps = 50000
+(nIter = ceiling((numSavedSteps * thinSteps) / nChains))
+```
+
+```{r}
+# Create, initialize, and adapt the model:
+jagsModel <- jags.model(
+  "TEMPmodel.txt" ,
+  data = dataList ,
+  inits = initsList ,
+  n.chains = nChains ,
+  n.adapt = adaptSteps
+)
+```
+
+Run the chains.
+```{r}
+# Burn-in:
+update( jagsModel , n.iter=burnInSteps )
+# The saved MCMC chain:
+codaSamples = coda.samples( jagsModel , variable.names=parameters , 
+                      n.iter=nIter , thin=thinSteps )
+```
+
+Explore results. $\nu$ is small, so there are fat tails
+
+* $\nu$ is gamma/degrees of freedom of t-distribution
+
+* AKA parameter responsible for fattness of tails
+
+```{r}
+summary(codaSamples)
+```
+
+MLE
+```{r}
+mean(y)
+sd(y)
+```
+
+Note that the robust estimate of $\mu$ is similar, but $\sigma$ is significantly smaller.
+```{r}
+plot(codaSamples)
+```
+
+```{r}
+summary(sd.process)
+```
+
+$\nu$ is difficult to simulate without auto-correlation. 
+```{r}
+autocorr.plot(codaSamples, ask = F)
+```
+
+We look at the effective size because of the auto-correlation we have significant drop in observations in nu and sigma, which is bad because we spend a lot of time rejecting $\nu$ and $\sigma$ and may have to increase observations.
+```{r}
+effectiveSize(codaSamples)
+```
+
+Note that effective sizes for $\nu$ and $\sigma$ are quite small.
+We may need to run MCMC in Stan.
+
+```{r}
+gelman.diag(codaSamples)
+gelman.plot(codaSamples)
+```
+
+$\nu$ has widest HDI.
+```{r}
+head(codaSamples[1])
+```
+
+If we have such a big difference between the MLE estimaste which assumes Gaussian distribution and HDI coming as result of robusut model, then robust model is necessary here. Therefore, it will be misleading to use Gaussian. It is the same to say that $\mu$ would be very small. 
+```{r}
+(HDIofChains <- lapply(codaSamples, function(z)
+  hdi(as.matrix(z))))
+```
+
+Non-robust estimate of $\sigma$ is outside the HDI for all the chains. 
+
+## 2.2 Stan
+Adapt the model description to t-distribution with additional parameter $\nu$.
+
+The fatter the tails are, the larger the $\sigma$ will be. When we have positive correlation between parameters, especially strong, **Stan** may give better results.
+
+* real exLambda parameter for the prior
+
+* sd_mu was not necessary, any small number would work
+
+* expLambda: we want to make it small enough; small enough will put concentration closer to zero; we would like to allow fat tail; at the same time the tail is fat enough, if it wants to go up towards Gaussian it will still be able to
+
+* Parameters:
+
+* $\nu$ substract 1 so zero is possible
+
+* Transformed parameters:
+
+* Need them to make transformation between $\nu$ and $\nu-1$
+
+* Model:
+
+* **Stan** name of distribution is different
+
+* Changes: added one parameter / prior and changed from gamma to normal t-distribution
+
+```{r}
+modelString = "
+data {
+    int<lower=1> Ntotal;
+    real y[Ntotal];
+    real mean_mu;
+    real sd_mu;
+}
+transformed data {
+    real unifLo;
+    real unifHi;
+    real normalSigma;
+    real expLambda;         //New: parameter of prior for nu 
+    unifLo = sd_mu/1000;
+    unifHi = sd_mu*1000;
+    normalSigma = sd_mu*100;
+    expLambda=1/29.0;      //New: setting value for expLambda
+}
+parameters {
+    real<lower=0> nuMinusOne; //New: definition of additional parameter nu
+    real mu;
+    real<lower=0> sigma;
+}
+transformed parameters {
+    real<lower=0> nu;           //New: new parameter nu
+    nu=nuMinusOne+1;           //New: shifting nu to avoid zero
+}
+model {
+    sigma ~ uniform(unifLo, unifHi);
+    mu ~ normal(mean_mu, normalSigma);
+    nuMinusOne~exponential(expLambda);      //New: exponential prior for nu
+    y ~ student_t(nu, mu, sigma);           //New: student_t distribution for nu
+}
+" # close quote for modelString
+```
+
+Create DSO.
+```{r}
+stanDso <- stan_model(model_code = modelString)
+```
+
+```{r}
+stanFitRobust <- sampling(
+  object = stanDso ,
+  data = dataList ,
+  pars = c('nu', 'mu', 'sigma'),
+  chains = 3,
+  cores = 3,
+  iter = 50000,
+  warmup = 300,
+  thin = 1
+)
+```
+
+Explore the results.
+```{r}
+# text statistics:
+print(stanFitRobust)
+```
+
+```{r}
+# estimates & hdi:
+plot(stanFitRobust)
+```
+
+```{r}
+# samples
+class(stanFitRobust)
+```
+
+```{r}
+rstan::traceplot(stanFitRobust, ncol = 1, inc_warmup = F)
+```
+
+```{r}
+pairs(stanFitRobust, pars = c('nu', 'mu', 'sigma'))
+```
+
+There is dependence with $\nu$ and $\sigma$. Need to check copula.
+```{r}
+stan_scat(stanFitRobust, c('nu','mu'))
+```
+
+```{r}
+stan_scat(stanFitRobust, c('nu','sigma'))
+```
+
+```{r}
+stan_scat(stanFitRobust, c('mu','sigma'))
+```
+
+```{r}
+stan_hist(stanFitRobust)
+stan_dens(stanFitRobust)
+```
+
+```{r}
+stan_diag(stanFitRobust, information = "sample", chain = 0)
+```
+
+High acceptance where the parameter is ($\mu$). Histogram acceptance 100% is close to one. Almost all the cases we have 100% acceptance.
+```{r}
+stan_diag(stanFitRobust, information = "stepsize", chain = 0)
+```
+
+```{r}
+stan_diag(stanFitRobust, information = "stepsize", chain = 0)
+stan_diag(stanFitRobust, information = "treedepth", chain = 0)
+stan_diag(stanFitRobust, information = "divergence", chain = 0)
+```
+
+
+```{r}
+stanRobustChains <- extract(stanFitRobust)
+names(stanRobustChains)
+```
+
+```{r}
+plot(stanRobustChains$nu, stanRobustChains$sigma)
+```
+
+There seems to be a pattern in relationship between $\sigma$ and $\nu$. Check if there is dependency. Dependence is Frank (square tails).
+```{r}
+plot(rank(stanRobustChains$nu), rank(stanRobustChains$sigma))
+```
+
+**Guess type of copula by looking at the empirical copula. Interpret the dependency.**  Positive co-monotonic dependence with $\nu$ and $\sigma$. When $\nu$ because small, distribution becomes tighter ($\sigma$ does not measure tails; $\sigma$ measures base width; fat tails base width becomes more narrow). 
+
+Explore shiny object.
+```{r eval=FALSE}
+launch_shinystan(stanFitRobust)
+```
+
+
+
+
+
+
+

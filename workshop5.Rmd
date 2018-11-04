@@ -197,7 +197,7 @@ Also, it may be a good idea to try avoiding significant difference in prior prob
 
 # 3 Application of Stan
 ```{r}
-source("DBDA2Eprograms/DBDA2E-utilities.R")
+source(glue::glue("{here::here()}/DBDA2Eprograms/DBDA2E-utilities.R"))
 ```
 
 Hamiltonian simulations are used to overcome the limitations of **JAGS**. Hamilton takes big leaps and then analyze the space before moving on. It works well for continuous distribution with narrow hallways and auto correlation. **Stan** has complex structure of parameters that they tune automatically. However, when tuning is too complex, **JAGS** may be better.
@@ -528,10 +528,11 @@ Here we call Stan directly.
 Read the data.
 Create the data list for the model.
 ```{r}
-myData = read.csv("./DBDA2Eprograms/TherapeuticTouchData.csv")
+myData = read.csv(glue::glue("{here::here()}/DBDA2Eprograms/TherapeuticTouchData.csv"))
 
 y <- as.numeric(myData$y)
 s <- as.numeric(myData$s) # ensures consecutive integer levels
+
 # Do some checking that data make sense:
 if (any(y != 0 & y != 1)) {
   stop("All y values must be 0 or 1.")
@@ -540,7 +541,7 @@ if (any(y != 0 & y != 1)) {
 Ntotal = length(y)
 Nsubj = length(unique(s))
 
-  # Specify the data in a list, for later shipment to JAGS:
+# Specify the data in a list, for later shipment to JAGS:
 dataList = list(
   y = y,
   s = s,
