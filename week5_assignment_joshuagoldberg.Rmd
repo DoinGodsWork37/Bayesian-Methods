@@ -201,7 +201,7 @@ stan_trace(stanFit) +
 ```
 
 There are serious auto-correlation issues with the model. The plots below illustrate that the chains get stuck in states. One fix may be to add thinning. Or maybe the model is not good at all. Moreover, modification may be needed for $\kappa$ to allow better chain convergence.
-```{r}
+```{r Bad-auto-correlation}
 stan_ac(stanFit, separate_chains = T)
 ```
 
@@ -211,7 +211,7 @@ pairs(stanFit, pars = c("omega", "kappa"))
 stan_hist(stanFit)
 ```
 
-# 3 How the model can be modified to improve convergence?
+# 3 How can the model can be modified to improve convergence?
 
 **Hint:** Think about modifying prior distribution for $\kappa$.
 

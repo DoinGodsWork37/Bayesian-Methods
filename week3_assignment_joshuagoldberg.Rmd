@@ -5,7 +5,6 @@ date: "`r format(Sys.time(), '%B, %d %Y')`"
 output:
   html_document:
     df_print: paged
-    css: style.css
   github_document: null
   pdf_document: default
 editor_options:

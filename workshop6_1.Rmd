@@ -436,10 +436,9 @@ lines(den$x, dnorm(den$x, mean(y), sd(y)), col = "red")
 Robust models and fat tail models, best distribution is student-t distribution.
 sum of squares of standard normal is chi-squared. Distributed as z / chi^2
 
-Gamma is only parameter of t-distribution. And it has fat-tail distribution because the the denominator. Higher degrees of freedom for t-distribution converges to Gaussian.
+Gamma is only parameter of t-distribution. And it has fat-tail distribution because of the denominator. Higher degrees of freedom for t-distribution converges to Gaussian.
 
 Gamma equals one becomes cauchy. 
-
 
 Three parameters: mu (same as Gaussian), sigma (same as Gaussian), gamma (takes care of the tails).
 
@@ -464,11 +463,11 @@ Describe the model in **JAGS**.
 
 Two changes
 
-* dt() instead of dnorm()
+* `dt()` instead of `dnorm()`
 
 * Make $\sigma$ uninformative
 
-* dexp() Make concentration as close to zero as possible to allow fat tails, but at the same time want fat tails on the right to allow it to be Gaussian to expand between 0 and 1; very convenient
+* `dexp()` Make concentration as close to zero as possible to allow fat tails, but at the same time want fat tails on the right to allow it to be Gaussian to expand between 0 and 1; very convenient
 
 * $\sigma$ cannot go to zero but exponential can; instead of $\mu$ do $\mu-1$, which can go to zero; but it is a low probability so we do not do it here
 ```{r}
@@ -588,11 +587,11 @@ Adapt the model description to t-distribution with additional parameter $\nu$.
 
 The fatter the tails are, the larger the $\sigma$ will be. When we have positive correlation between parameters, especially strong, **Stan** may give better results.
 
-* real exLambda parameter for the prior
+* `real exLambda` parameter for the prior
 
-* sd_mu was not necessary, any small number would work
+* `sd_mu` was not necessary, any small number would work
 
-* expLambda: we want to make it small enough; small enough will put concentration closer to zero; we would like to allow fat tail; at the same time the tail is fat enough, if it wants to go up towards Gaussian it will still be able to
+* `expLambda`: we want to make it small enough; small enough will put concentration closer to zero; we would like to allow fat tail; at the same time the tail is fat enough, if it wants to go up towards Gaussian it will still be able to
 
 * Parameters:
 
@@ -653,7 +652,7 @@ stanDso <- stan_model(model_code = modelString)
 stanFitRobust <- sampling(
   object = stanDso ,
   data = dataList ,
-  pars = c('nu', 'mu', 'sigma'),
+  pars = c("nu", "mu", "sigma"),
   chains = 3,
   cores = 3,
   iter = 50000,

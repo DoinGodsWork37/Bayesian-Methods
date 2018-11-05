@@ -44,6 +44,7 @@ file.copy(from = "~/Downloads/", to = here::here(),
           copy.mode = TRUE)
 ```
 
+# Data 
 Consider daily simple returns of AAPL, which, for example, can be obtained as:
 ```{r}
 getSymbols("AAPL", from = "2015-1-1", to = "2015-12-31")
@@ -62,31 +63,102 @@ AAPL.ret <- read_csv("documents-MScA Bayesian Methods (32014)-MScA 32014 Lecture
 
 Visualize the distribution of the returns.
 ```{r}
+AAPL.dens <- density(AAPL.returns.2015)
 data.frame(returns = AAPL.returns.2015) %>%
   ggplot() +
   geom_density(aes(returns)) +
-  geom_line(data = data.frame(x = AAPL.dens$x, y = dnorm(AAPL.dens$x,mean(AAPL.ret$x),sd(AAPL.ret$x))), aes(x, y), stat = "identity", color = "red") +
+  geom_line(data = data.frame(x = AAPL.dens$x, y = dnorm(AAPL.dens$x, mean(AAPL.ret$x), sd(AAPL.ret$x))), aes(x, y), stat = "identity", color = "red") +
   labs(title = "Returns Distribution",
        x = "Returns",
        y = "Density")
 ```
 
-Using the methods of the workshop estimate parameters of normal model and robust normal model for the Apple returns.
+Using the methods of the workshop to estimate parameters of normal model and robust normal model for the Apple returns.
+```{r}
+returns <- AAPL.returns.2015
+sd_returns <- sd(AAPL.returns.2015)
+mean_returns <- mean(AAPL.returns.2015)
+arithmetic_volatility <- sd_returns * sqrt(365)
+Ntotal <- length(AAPL.returns.2015)
+
+data = list(
+  y = returns,
+  Ntotal = Ntotal,
+  mean_mu = mean_returns,
+  sd_mu = sd_returns
+)
+```
 
 Estimate realized arithmetic volatility of Apple returns using both normal and robust models.
 
 Volatility is calculated as: $$\sigma=Sd\sqrt{365},$$ where $Sd$ is standard deviation of daily arithmetic returns $S(t)−S(t−1)$, $S(t)$ is stock price.
 
-```{r}
-
+# Fit Normal Model
+```{r Fit-model, message=FALSE, warning=FALSE}
+fit <- stan(file = "model_1_week_6_assignment.stan", data = data, seed = 1)
 ```
 
+##  Analyze convergence
+```{r Show-fit}
+plot(fit)
+show(fit)
+names(fit)
+summary(fit)
+```
 
+Trace shows $\kappa$ not overlapping.
+```{r Trace}
+stan_trace(fit) +
+  scale_color_viridis_d() + 
+  theme(legend.position = "none")
+```
 
+```{r Auto-correlation}
+stan_ac(fit, separate_chains = T)
+```
 
+```{r Parameters}
+pairs(fit, pars = c("mu", "sigma"))
+stan_hist(fit)
+```
 
+```{r Parameters}
+stan_diag(fit, information = "treedepth")
+```
 
+# Fit Robust Normal (fat tails) Model
+```{r Fit-robust-model, message=FALSE, warning=FALSE}
+fit_robust <- stan(file = "robust_normal_model_week_6_assignment.stan", data = data, seed = 1)
+```
 
+##  Analyze convergence
+```{r Show-fit-robust}
+plot(fit_robust, pars = c("mu", "sigma"))
+show(fit_robust)
+names(fit_robust)
+summary(fit_robust)
+```
+
+Trace shows $\kappa$ not overlapping.
+```{r Trace}
+stan_trace(fit_robust) +
+  scale_color_viridis_d() + 
+  theme(legend.position = "none")
+```
+
+Robust model has some auto-correlation.
+```{r Auto-correlation}
+stan_ac(fit_robust, separate_chains = T)
+```
+
+```{r Parameters}
+pairs(fit_robust, pars = c("mu", "sigma"))
+stan_hist(fit_robust)
+```
+
+```{r Parameters}
+stan_diag(fit_robust, information = "treedepth")
+```
 
 
 
