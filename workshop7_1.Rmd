@@ -1,0 +1,464 @@
+---
+title: "Workshop 7.1"
+author: "Joshua Goldberg"
+date: "`r format(Sys.time(), '%B, %d %Y')`"
+always_allow_html: yes
+output:
+  github_document: 
+  pdf_document: default
+editor_options: 
+  chunk_output_type: inline
+---
+
+```{r Global-options, include=FALSE}
+knitr::opts_chunk$set(fig.width=6, fig.height=4, fig.path='Figs/',
+                      warning=FALSE, message=FALSE, cache=TRUE)
+```
+
+```{r Preamble, echo=FALSE}
+# Enter package in p_load()
+# If package is not installed, p_load() will install and load the package
+if(!"pacman" %in% rownames(installed.packages())) {
+  install.packages("pacman")
+  }
+pacman::p_load(tidyverse, ggthemes, here, rstan)
+
+# Set default ggplot theme to tufte
+theme_set(ggthemes::theme_tufte())
+```
+
+```{r Copy-files, echo=FALSE, eval=FALSE}
+# Enter files to load to project directory in from = "~/Downloads/your_file_name_here"
+file.copy(from = "~/Downloads/", to = here::here(), 
+          overwrite = TRUE, recursive = FALSE, 
+          copy.mode = TRUE)
+```
+
+# 1 References
+[G] Andrew Gelman, John B. Carlin, Hal S. Stern, David B. Dunson, Aki Vehtari, Donald B. Rubin, Bayesian Data Analysis, Third Edition, 2013, Taylor & Francis Group.
+[K] John K. Kruschke, Doing Bayesian Data Analysis, A Tutorial with R, JAGS, and STAN, 2015, Elsevier.
+
+# 2 Two group analysis: Fitting normal model for 2 groups with no predictors
+## 2.1 IQ data
+```{r Data}
+myDataFrame = read.csv("documents-MScA Bayesian Methods (32014)-MScA 32014 Lecture 8-TwoGroupIQ.csv")
+y = as.numeric(myDataFrame[, "Score"])
+x = as.numeric(as.factor(myDataFrame[, "Group"]))
+(xLevels = levels(as.factor(myDataFrame[, "Group"])))
+```
+
+```{r}
+Ntotal = length(y)
+# Specify the data in a list, for later shipment to JAGS:
+dataList = list(
+  y = y ,
+  x = x ,
+  Ntotal = Ntotal ,
+  meanY = mean(y) ,
+  sdY = sd(y)
+)
+dataList
+```
+
+The utilities file from [K].
+```{r}
+source("./DBDA2Eprograms/DBDA2E-utilities.R")
+```
+
+# 2.2 Normal assumption
+Assuming that both groups samples have normal distributions, estimate the parameters and compare them.
+
+Write description of the model for stan.
+```{r}
+read_file("./model_1_workshop7.stan")
+```
+
+```{r}
+modelString <- "data {
+  int<lower=1> Ntotal;
+  int x[Ntotal];
+  real y[Ntotal];
+  real meanY;
+  real sdY;
+}
+
+transformed data {
+  real unifLo;
+  real unifHi;
+  real normalSigma;
+  unifLo = sdY/1000;
+  unifHi = sdY*1000;
+  normalSigma = sdY*100;
+}
+
+parameters {
+    real mu[2];
+    real<lower=0> sigma[2];
+}
+
+model {
+    sigma ~ uniform(unifLo, unifHi);
+    mu ~ normal(meanY, normalSigma);
+    for (i in 1:Ntotal) {
+        y[i] ~ normal(mu[x[i]] , sigma[x[i]]);
+    }
+}
+"
+```
+
+If running the description in modelString for the first time create `stanDSONormal`, otherwise reuse it.
+```{r}
+stanDsoNormal <- stan_model(model_code = modelString)
+```
+
+Run MCMC.
+```{r}
+parameters = c("mu" , "sigma")     # The parameters to be monitored
+adaptSteps = 500               # Number of steps to "tune" the samplers
+burnInSteps = 1000
+nChains = 4
+thinSteps = 1
+numSavedSteps <- 5000
+stanFitNormal <- sampling(
+  stanDsoNormal,
+  data = dataList ,
+  pars = parameters ,
+  # optional
+  chains = nChains ,
+  iter = (ceiling(numSavedSteps / nChains) * thinSteps +
+            burnInSteps) ,
+  warmup = burnInSteps ,
+  init = "random" ,
+  # optional
+  thin = thinSteps
+)
+```
+
+Explore the results.
+```{r}
+# text statistics:
+print(stanFitNormal)
+```
+
+```{r}
+# estimates & hdi:
+plot(stanFitNormal)
+```
+
+```{r}
+# samples
+rstan::traceplot(stanFitNormal, ncol = 1, inc_warmup = F)
+```
+
+```{r}
+pairs(stanFitNormal, pars = c('mu', 'sigma'))
+```
+
+```{r}
+stan_hist(stanFitNormal)
+```
+
+```{r}
+# autocorrelation:
+stan_ac(stanFitNormal, separate_chains = T)
+```
+
+```{r}
+stan_diag(stanFitNormal, information = "sample", chain = 0)
+```
+
+```{r}
+stan_diag(stanFitNormal, information = "stepsize", chain = 0)
+```
+
+If you prefer output using coda class reformat the chains into coda:
+```{r}
+stan2coda <- function(stanFitNormal) {
+  # apply to all chains
+  mcmc.list(lapply(1:ncol(stanFitNormal), function(x)
+    mcmc(as.array(stanFitNormal)[, x, ])))
+}
+codaSamples <- stan2coda(stanFitNormal)
+summary(codaSamples)
+```
+
+```{r}
+plot(codaSamples)
+```
+
+```{r}
+effectiveSize(codaSamples)
+gelman.diag(codaSamples)
+gelman.plot(codaSamples)
+```
+
+```{r}
+plot(
+  density(codaSamples[[1]][, 1]),
+  xlim = c(10, 120),
+  ylim = c(0, .25),
+  main = "Posterior Densities"
+)  # mu[1], 1st chain
+lines(density(codaSamples[[1]][, 2]))                         # mu[2], 1st chain
+lines(density(codaSamples[[1]][, 3]))                         # sigma[1], 1st chain
+lines(density(codaSamples[[1]][, 4]))                         # sigma[2], 1st chain
+lines(density(codaSamples[[2]][, 1]), col = "red")               # mu[1], 2nd chain
+lines(density(codaSamples[[2]][, 2]), col = "red")               # mu[2], 2nd chain
+lines(density(codaSamples[[2]][, 3]), col = "red")               # sigma[1], 2nd chain
+lines(density(codaSamples[[2]][, 4]), col = "red")               # sigma[2], 2nd chain
+```
+
+## 2.3 Robust assumption
+Use the robust assumption of Student-t distribution instead of normal.
+```{r}
+modelString <- "
+data {
+    int<lower=1> Ntotal;
+    int x[Ntotal];          //Group variable
+    real y[Ntotal];
+    real meanY;
+    real sdY;
+}
+transformed data {
+    real unifLo;
+    real unifHi;
+    real normalSigma;
+    real expLambda;         //Parameter of prior for nu 
+    unifLo = sdY/100;
+    unifHi = sdY*100;
+    normalSigma = sdY*100;
+    expLambda = 1/30.0;      //Setting value for expLambda
+}
+parameters {
+    real<lower=0> nu;
+    real mu[2];                 //Making 2 groups
+    real<lower=0> sigma[2];     //Making 2 groups
+}
+model {
+    sigma ~ uniform(unifLo, unifHi);        //Recall that sigma is a vector of 2 numbers
+    mu ~ normal(meanY, normalSigma);        //Recall that mu is a vector of 2 numbers
+    nu~exponential(expLambda);      //Exponential prior for nu
+    for (i in 1:Ntotal){
+        y[i] ~ student_t(nu, mu[x[i]], sigma[x[i]]);           //Student_t distribution for y with nested group index
+    }
+    
+}
+"
+# close quote for modelString
+# If necessary, save the description to reuse later
+# writeLines( modelString , con="TEMPmodel.txt" )
+```
+
+```{r}
+stanDsoRobust <- stan_model(model_code = modelString) 
+```
+
+
+
+```{r}
+parameters = c("mu" , "sigma" , "nu")     # The parameters to be monitored
+adaptSteps = 500               # Number of steps to "tune" the samplers
+burnInSteps = 1000
+nChains = 4
+thinSteps = 1
+numSavedSteps <- 5000
+# Get MC sample of posterior:
+stanFitRobust <- sampling(
+  object = stanDsoRobust ,
+  data = dataList ,
+  pars = parameters ,
+  # optional
+  chains = nChains ,
+  cores = nChains,
+  iter = (ceiling(numSavedSteps / nChains) * thinSteps
+          + burnInSteps) ,
+  warmup = burnInSteps ,
+  init = "random" ,
+  # optional
+  thin = thinSteps
+)
+```
+
+```{r}
+print(stanFitRobust)
+plot(stanFitRobust)
+rstan::traceplot(stanFitRobust, ncol = 1, inc_warmup = F)
+```
+
+* No subscript of $\nu$ so it's the same for both groups; and we know how each of them depends on $\nu$; if $\nu$ goes down, $\sigma$ goes down
+
+* Correlation between $\nu$ and $\sigma$ is created by how we specify the model
+
+* Based on the problem there may be reason to have separate $\nu$ or the same; it's an assumption that the tail for both groups are the same; if we have reason to believe the tails are different, then we should consider different $\nu$'s for different groups
+
+```{r}
+pairs(stanFitRobust, pars = c('nu', 'mu', 'sigma'))
+```
+
+```{r}
+stan_hist(stanFitRobust)
+```
+
+```{r}
+stan_dens(stanFitRobust)
+```
+
+```{r}
+stan_ac(stanFitRobust, separate_chains = T)
+```
+
+```{r}
+stan_diag(stanFitRobust, information = "sample", chain = 0)
+```
+
+# 3 Comparison of the groups
+## 3.1 FNP approach
+For comparison decide whether the two groups are different or not using the FNP approach.
+
+Use t-test with unequal variances:
+```{r}
+qqnorm(y[x == 1])
+qqline(y[x == 1])
+```
+
+Pretty fat tails, but a significant portion has a shape of normal.
+
+Group 2: tails are fatter and both sides have deviation
+```{r}
+qqnorm(y[x == 2])
+qqline(y[x == 2])
+```
+
+```{r}
+t.test(y[x == 1], y[x == 2], var.equal = F, paired = FALSE)
+```
+
+Result: with 5% level the hypothesis about equality of the 2 samples cannot be rejected.
+However, the case is not so clear: the p-value of the test is very close to 5%.
+The result is not very conclusive because the sample is not very long: 120 observations in both groups together.
+The test relies on the assumption that distributions of both samples are Gaussian.
+As we can see in qq-plots this assumption does not hold.
+
+## 3.2 Bayesian approach
+Now use Bayesian approach based on robust estimation.
+
+Create matrices of combined chains for the two means and two standard deviations of the robust fit.
+```{r}
+summary(stanFitRobust)
+```
+
+Classic method would show mean values are significantly different.
+```{r}
+dis1 <- cbind(
+  Mu = rstan::extract(stanFitRobust, pars = "mu[1]")$'mu[1]',
+  Sigma = rstan::extract(stanFitRobust, pars = "sigma[1]")$'sigma[1]'
+)
+dis2 <- cbind(
+  Mu = rstan::extract(stanFitRobust, pars = "mu[2]")$'mu[2]',
+  Sigma = rstan::extract(stanFitRobust, pars = "sigma[2]")$'sigma[2]'
+)
+denDis1 <- density(dis1[, "Mu"])
+denDis2 <- density(dis2[, "Mu"])
+plot(denDis1, col = "blue", xlim = c(90, 120))
+lines(denDis2, col = "green")
+```
+
+Traditional Bayesian approach: look at HDIs.
+```{r}
+library(HDInterval)
+hdi(cbind(dis1[, 1], dis2[, 1]), credMass = .9)
+```
+
+Rule in Bayesian is they overlap like confidence intervals, then it is not conclusion
+```{r}
+hdi(cbind(dis1[, 2], dis2[, 2]), credMass = .85)
+```
+
+The 95% HDI intervals overlap for both parameters, but with reduced credible mass level they can be distinguished.
+
+## 3.3 FNP approach to Markov chains
+Apply FNP approach to the chain samples.
+
+First, check if the samples for two standard deviations are significantly different or not:
+```{r}
+c(mean(dis1[, 2]), mean(dis2[, 2])) # mean values
+```
+
+Not a good idea to do hypothesis testing; with this large sample, hypothesis will be rejected
+
+```{r}
+c(sd(dis1[, 2]), sd(dis2[, 2]))     # standard deviations of samples of MCMC standard deviations
+```
+
+```{r}
+ks.test(dis1[, 2], dis2[, 2])       #Kolmogorov-Smirnov test for posterior distributions of standard deviations
+```
+
+They aren't different; treated group has a wider distribution; more interesting question is not about mean value; it's about the shape of the distribution you get
+```{r}
+den <- density(dis2[, 2])
+plot(density(dis1[, 2]), xlim = c(5, 30))
+lines(den$x, den$y, col = "red")
+```
+
+```{r}
+t.test(dis1[, 2], dis2[, 2], var.equal = F, paired = FALSE) #t-test for means of posterior distributions for standard deviations
+```
+
+Check shapes of the distributions of the mean and standard deviation parameters.
+How different are they between control and treated groups?
+
+For standard deviations:
+Skewed upgrades; not surprising; this is $\sigma$
+```{r}
+qqnorm(dis1[, 2])  # control
+qqline(dis1[, 2])
+```
+
+Treatment made the skew and the $\sigma$ larger; treatment doesn't just shape mean value; it changes the shape of the distribution
+```{r}
+qqnorm(dis2[, 2])  # treatment
+qqline(dis2[, 2])
+```
+
+```{r}
+qqnorm(dis1[, 1])  #control
+qqline(dis1[, 1])
+```
+
+```{r}
+qqnorm(dis2[, 1])  # treatment
+qqline(dis2[, 1])
+```
+
+Comparison of mean and standard deviations of the posterior sample for standard deviations, Kolmogorov-Smirnov test, density plots and t-test for the two samples all indicate that the variances of the two groups are different.
+
+This means that we cannot apply ANOVA to compare the two group mean values directly.
+
+Try t-test for the two means of the posterior distributions with different variances:
+
+```{r}
+t.test(dis1[, 1], dis2[, 1], var.equal = F, paired = FALSE)
+```
+
+The null hypothesis of equality of the means of the posterior distributions for the mean values of the two groups decisively rejected: we are testing with a lot longer samples.
+
+Plot the images of the two groups in the mean-standard deviation parameter space:
+```{r}
+plot(
+  dis1,
+  xlim = c(92, 118),
+  ylim = c(5, 33),
+  col = "red",
+  xlab = "Mean",
+  ylab = "St. Dev."
+)
+points(dis2, col = "blue")
+```
+
+Centers of the distribution are very different; when the mean values are the same. The group circled below is different due to mean value being low, but with a high standard deviation.
+```{r fig.width=6, fig.asp=.683}
+knitr::include_graphics("~/Desktop/screen_shots/Screen Shot 2018-11-05 at 6.52.09 PM.jpg")
+```
+
+Use at least 2 different methods proving that there is a significant difference between the 2 groups shown on the plot.

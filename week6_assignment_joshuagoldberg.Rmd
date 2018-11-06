@@ -74,7 +74,7 @@ data.frame(returns = AAPL.returns.2015) %>%
 ```
 
 Using the methods of the workshop to estimate parameters of normal model and robust normal model for the Apple returns.
-```{r}
+```{r Data-prep}
 returns <- AAPL.returns.2015
 sd_returns <- sd(AAPL.returns.2015)
 mean_returns <- mean(AAPL.returns.2015)
@@ -95,7 +95,7 @@ Volatility is calculated as: $$\sigma=Sd\sqrt{365},$$ where $Sd$ is standard dev
 
 # Fit Normal Model
 ```{r Fit-model, message=FALSE, warning=FALSE}
-fit <- stan(file = "model_1_week_6_assignment.stan", data = data, seed = 1)
+fit <- stan(file = "normal_model_week_6_assignment.stan", data = data, seed = 1)
 ```
 
 ##  Analyze convergence
@@ -160,5 +160,9 @@ stan_hist(fit_robust)
 stan_diag(fit_robust, information = "treedepth")
 ```
 
+```{r}
+mean(rstan::extract(fit)$sigma)
+mean(rstan::extract(fit_robust)$sigma)
+```
 
 
