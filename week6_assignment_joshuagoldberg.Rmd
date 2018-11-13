@@ -99,6 +99,8 @@ fit <- stan(file = "normal_model_week_6_assignment.stan", data = data, seed = 1)
 ```
 
 ##  Analyze convergence
+
+$\mu$ and $\sigma$ are near the data estimates:
 ```{r Show-fit}
 plot(fit)
 show(fit)
@@ -106,25 +108,36 @@ names(fit)
 summary(fit)
 ```
 
-Trace shows $\kappa$ not overlapping.
 ```{r Trace}
 stan_trace(fit) +
   scale_color_viridis_d() + 
   theme(legend.position = "none")
 ```
 
-```{r Auto-correlation}
+```{r Auto-correlation-normal}
 stan_ac(fit, separate_chains = T)
 ```
 
-```{r Parameters}
+```{r Parameters-normal}
 pairs(fit, pars = c("mu", "sigma"))
 stan_hist(fit)
 ```
 
-```{r Parameters}
+```{r Tree}
 stan_diag(fit, information = "treedepth")
 ```
+
+## Review
+
+Normal model had no diagnostic problems and the fit was close to estimate from the data:
+```{r}
+sd_returns_model <- mean(rstan::extract(fit)$sigma) 
+arithmetic_volatility <- sd_returns * sqrt(365)
+arithmetic_volatility_model <- mean(rstan::extract(fit)$sigma)  * sqrt(365)
+
+rbind(sd_returns_model, sd_returns, arithmetic_volatility, arithmetic_volatility_model)
+```
+
 
 # Fit Robust Normal (fat tails) Model
 ```{r Fit-robust-model, message=FALSE, warning=FALSE}
@@ -139,8 +152,7 @@ names(fit_robust)
 summary(fit_robust)
 ```
 
-Trace shows $\kappa$ not overlapping.
-```{r Trace}
+```{r Trace-robust}
 stan_trace(fit_robust) +
   scale_color_viridis_d() + 
   theme(legend.position = "none")
@@ -151,7 +163,7 @@ Robust model has some auto-correlation.
 stan_ac(fit_robust, separate_chains = T)
 ```
 
-```{r Parameters}
+```{r Parameters-robust}
 pairs(fit_robust, pars = c("mu", "sigma"))
 stan_hist(fit_robust)
 ```
@@ -160,9 +172,20 @@ stan_hist(fit_robust)
 stan_diag(fit_robust, information = "treedepth")
 ```
 
+## Review
+
+Robust model produced a smaller $\sigma$:
 ```{r}
-mean(rstan::extract(fit)$sigma)
-mean(rstan::extract(fit_robust)$sigma)
+arithmetic_volatility_model_robust <- mean(rstan::extract(fit_robust)$sigma)  * sqrt(365)
+
+rbind(
+  sd_returns_model,
+  sd_returns,
+  arithmetic_volatility,
+  arithmetic_volatility_model,
+  arithmetic_volatility_model_robust
+)
 ```
 
+We expect this, given the nature of fat tail distribution and tight width.
 

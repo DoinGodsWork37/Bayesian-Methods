@@ -40,7 +40,7 @@ file.copy(from = "~/Downloads/", to = here::here(),
 
 # 2 Two group analysis: Fitting normal model for 2 groups with no predictors
 ## 2.1 IQ data
-```{r Data}
+```{r}
 myDataFrame = read.csv("documents-MScA Bayesian Methods (32014)-MScA 32014 Lecture 8-TwoGroupIQ.csv")
 y = as.numeric(myDataFrame[, "Score"])
 x = as.numeric(as.factor(myDataFrame[, "Group"]))
@@ -51,10 +51,10 @@ x = as.numeric(as.factor(myDataFrame[, "Group"]))
 Ntotal = length(y)
 # Specify the data in a list, for later shipment to JAGS:
 dataList = list(
-  y = y ,
-  x = x ,
-  Ntotal = Ntotal ,
-  meanY = mean(y) ,
+  y = y,
+  x = x,
+  Ntotal = Ntotal,
+  meanY = mean(y),
   sdY = sd(y)
 )
 dataList
@@ -253,8 +253,6 @@ model {
 stanDsoRobust <- stan_model(model_code = modelString) 
 ```
 
-
-
 ```{r}
 parameters = c("mu" , "sigma" , "nu")     # The parameters to be monitored
 adaptSteps = 500               # Number of steps to "tune" the samplers
@@ -262,18 +260,19 @@ burnInSteps = 1000
 nChains = 4
 thinSteps = 1
 numSavedSteps <- 5000
+
 # Get MC sample of posterior:
 stanFitRobust <- sampling(
   object = stanDsoRobust ,
-  data = dataList ,
-  pars = parameters ,
+  data = dataList,
+  pars = parameters,
   # optional
-  chains = nChains ,
+  chains = nChains,
   cores = nChains,
   iter = (ceiling(numSavedSteps / nChains) * thinSteps
-          + burnInSteps) ,
-  warmup = burnInSteps ,
-  init = "random" ,
+          + burnInSteps),
+  warmup = burnInSteps,
+  init = "random",
   # optional
   thin = thinSteps
 )

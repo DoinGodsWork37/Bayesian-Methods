@@ -255,8 +255,6 @@ dat <- list(
 
 ```{r}
 # 17_1: robust model to predict metric variable using metric predictor
-
-
 # using Height-Weight data from Kruschke
 # fit model
 fitSimRegStan <- sampling(
@@ -645,11 +643,7 @@ If we want to estimate population slope, we should probably allow shrinkage more
 ```{r}
 knitr::include_graphics("~/Desktop/screen_shots/Image 3.jpeg")
 ```
-  
-```{r}
 
-```
-  
 
 
 
