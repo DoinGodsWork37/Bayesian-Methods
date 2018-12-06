@@ -1,0 +1,1978 @@
+<<<<<<< HEAD
+---
+title: "Week 7 Assignment"
+author: "Joshua Goldberg"
+date: "`r format(Sys.time(), '%B, %d %Y')`"
+always_allow_html: yes
+output:
+  github_document:
+  html_document:
+    theme: united
+    df_print: paged
+    highlight: textmate
+    code_folding: show
+    toc: true
+    toc_float: true
+editor_options: 
+  chunk_output_type: inline
+---
+
+```{r Global-options, include=FALSE}
+knitr::opts_chunk$set(fig.width=6, fig.asp=0.618, fig.path='Figs/',
+                      warning=FALSE, message=FALSE, cache=TRUE)
+```
+
+```{r Preamble, echo=FALSE}
+# Enter package in p_load()
+# If package is not installed, p_load() will install and load the package
+if(!"pacman" %in% rownames(installed.packages())) {
+  install.packages("pacman")
+  }
+pacman::p_load(tidyverse, ggthemes, here, rstan, caret, recipes, rsample, purrr, tictoc, knitr, kableExtra)
+
+# Set default ggplot theme to tufte
+theme_set(ggthemes::theme_tufte())
+
+# Parallel Stan
+rstan_options(auto_write = TRUE)
+options(mc.cores = parallel::detectCores())
+```
+
+```{r Copy-files, echo=FALSE, eval=FALSE}
+# Enter files to load to project directory in from = "~/Downloads/your_file_name_here"
+file.copy(from = "~/Downloads/", to = here::here(), 
+          overwrite = TRUE, recursive = FALSE, 
+          copy.mode = TRUE)
+```
+
+# References 
+[K] John K. Kruschke, Doing Bayesian Data Analysis, A Tutorial with R, JAGS, and STAN, 2015, Elsevier.
+
+Source the utilities file from [K].
+```{r}
+source("./DBDA2Eprograms/DBDA2E-utilities.R")
+```
+
+This project helps understanding comparison of groups in Gaussian model without predictors.
+
+# Use at least 2 different methods proving that the groups in section 3.3 of part 1 of the workshop are different.
+
+## Data
+```{r Data-TwoGroupIQ.csv}
+myDataFrame = read.csv("documents-MScA Bayesian Methods (32014)-MScA 32014 Lecture 8-TwoGroupIQ.csv")
+y = as.numeric(myDataFrame[, "Score"])
+x = as.numeric(as.factor(myDataFrame[, "Group"]))
+(xLevels = levels(as.factor(myDataFrame[, "Group"])))
+```
+
+```{r}
+Ntotal = length(y)
+dataList = list(
+  y = y,
+  x = x,
+  Ntotal = Ntotal,
+  meanY = mean(y),
+  sdY = sd(y)
+)
+dataList
+```
+
+## Robust model
+Robust assumption of Student-t distribution.
+```{stan, output.var="stanDsoRobust"}
+data {
+    int<lower=1> Ntotal;
+    int x[Ntotal];          //Group variable
+    real y[Ntotal];
+    real meanY;
+    real sdY;
+}
+transformed data {
+    real unifLo;
+    real unifHi;
+    real normalSigma;
+    real expLambda;         //Parameter of prior for nu 
+    unifLo = sdY/100;
+    unifHi = sdY*100;
+    normalSigma = sdY*100;
+    expLambda = 1/30.0;      //Setting value for expLambda
+}
+parameters {
+    real<lower=0> nu;
+    real mu[2];                 //Making 2 groups
+    real<lower=0> sigma[2];     //Making 2 groups
+}
+model {
+    sigma ~ uniform(unifLo, unifHi);        //Recall that sigma is a vector of 2 numbers
+    mu ~ normal(meanY, normalSigma);        //Recall that mu is a vector of 2 numbers
+    nu ~ exponential(expLambda);      //Exponential prior for nu
+    for (i in 1:Ntotal){
+        y[i] ~ student_t(nu, mu[x[i]], sigma[x[i]]);           //Student_t distribution for y with nested group index
+    }
+    
+}
+```
+
+### Fit `stanmodel` with `sampling()`
+```{r}
+parameters = c("mu" , "sigma" , "nu")     # The parameters to be monitored
+adaptSteps = 500               # Number of steps to "tune" the samplers
+burnInSteps = 1000
+nChains = 4
+thinSteps = 1
+numSavedSteps <- 5000
+
+# Get MC sample of posterior:
+stanFitRobust <- sampling(
+  object = stanDsoRobust,
+  data = dataList,
+  pars = parameters,
+  # optional
+  chains = nChains,
+  cores = nChains,
+  iter = (ceiling(numSavedSteps / nChains) * thinSteps
+          + burnInSteps),
+  warmup = burnInSteps,
+  init = "random",
+  # optional
+  thin = thinSteps
+)
+```
+
+### Fit results
+```{r}
+stanFitRobust
+```
+
+```{r}
+plot(stanFitRobust)
+rstan::traceplot(stanFitRobust, ncol = 1, inc_warmup = F)
+pairs(stanFitRobust, pars = c("nu","mu","sigma"))
+stan_diag(stanFitRobust,information = "sample",chain = 0)
+```
+
+Same fit results from the workshop, of course.
+
+## Extract $\mu$ and $\sigma$ from chains to measure difference between the two groups
+```{r}
+dis1 <- data.frame(
+  Mu = rstan::extract(stanFitRobust, pars = "mu[1]")$'mu[1]',
+  Sigma = rstan::extract(stanFitRobust, pars = "sigma[1]")$'sigma[1]'
+)
+
+dis2 <- data.frame(
+  Mu = rstan::extract(stanFitRobust, pars = "mu[2]")$'mu[2]',
+  Sigma = rstan::extract(stanFitRobust, pars = "sigma[2]")$'sigma[2]'
+)
+
+dis_df <- bind_rows("group_1" = dis1, "group_2" = dis2, .id = "Group") %>% 
+  mutate(Group = factor(Group)) %>% as_tibble()
+
+denDis1 <- density(dis1[, "Mu"])
+denDis2 <- density(dis2[, "Mu"])
+plot(denDis1, col = "blue", xlim = c(90, 120))
+lines(denDis2, col = "green")
+```
+
+## Two different methods to distinguish groups
+```{r Correlation, echo=FALSE, include=FALSE}
+ggcor <- function(df, ...) {
+  factors <- enquos(...)
+  cor_matrix <- cor(dis_df %>% mutate_at(vars(!!! factors), as.numeric) %>% select_if(is.numeric))
+  
+  # Get lower triangle of the correlation matrix
+  get_lower_tri <- function(cormat) {
+    cormat[upper.tri(cormat)] <- NA
+    return(cormat)
+  }
+  
+  # Get upper triangle of the correlation matrix
+  get_upper_tri <- function(cormat) {
+    cormat[lower.tri(cormat)] <- NA
+    return(cormat)
+  }
+  
+  reorder_cormat <- function(cormat) {
+    # Use correlation between variables as distance
+    dd <- as.dist((1 - cormat) / 2)
+    hc <- hclust(dd)
+    cormat <- cormat[hc$order, hc$order]
+  }
+  
+  # Reorder the correlation matrix
+  cormat <- reorder_cormat(cor_matrix)
+  tri <- get_upper_tri(cormat)
+  
+  # Melt the correlation matrix
+  melted_cormat <- reshape2::melt(tri, na.rm = TRUE) %>%
+    mutate(value = round(value, 2))
+  
+  ggheatmap <- ggplot(melted_cormat, aes(Var2, Var1, fill = value)) +
+    geom_tile(color = "white") +
+    scale_fill_gradient2(
+      low = "blue",
+      high = "red",
+      mid = "white",
+      midpoint = 0,
+      limit = c(-1, 1),
+      space = "Lab",
+      name = "Pearson\nCorrelation"
+    ) +
+    theme_minimal() + # minimal theme
+    theme(axis.text.x = element_text(
+      angle = 45,
+      vjust = 1,
+      size = 12,
+      hjust = 1
+    )) +
+    coord_fixed()
+  
+  ggheatmap +
+    geom_text(aes(Var2, Var1, label = value), color = "black", size = 3) +
+    theme(
+      axis.title.x = element_blank(),
+      axis.title.y = element_blank(),
+      panel.grid.major = element_blank(),
+      panel.border = element_blank(),
+      panel.background = element_blank(),
+      axis.ticks = element_blank(),
+      legend.justification = c(1, 0),
+      legend.position = c(0.6, 0.7),
+      legend.direction = "horizontal"
+    ) +
+    guides(fill = guide_colorbar(
+      barwidth = 7,
+      barheight = 1,
+      title.position = "top",
+      title.hjust = 0.5
+    ))
+}
+```
+
+## Correlation matrix
+There is a positive correlation between `Mu` and `Sigma`, suggesting higher values for `group_2`.
+```{r}
+ggcor(dis_df, Group)
+```
+
+## Logistic
+We will use logistic regression to see if predictability of groups can be achieved with `Mu` and `Sigma`.
+```{r}
+rec <- recipe(Group ~ Mu + Sigma, data = dis_df)
+  
+control <- trainControl(
+  method = "cv",
+  number = 10,
+  summaryFunction = twoClassSummary,
+  classProbs = TRUE,
+  savePredictions = TRUE
+)
+
+fit_logit <- train(
+  rec,
+  data = dis_df,
+  metric = "ROC",
+  method = "glm",
+  trControl = control,
+  family = binomial(link = "logit")
+) 
+```
+
+Summary of model shows that both `Mu` and `Sigma` are statistically significant for predicting `Group`.
+```{r}
+summary(fit_logit)
+```
+
+### Visualize predictions with group labels
+```{r}
+logit_predictions <- predict.train(fit_logit) %>%
+            data.frame(Group = .)
+
+dis_df_logit <- dis_df %>% mutate(logit_prediction = factor(logit_predictions$Group, levels = c("group_1", "group_2")))
+
+dis_df_logit %>% 
+  ggplot(aes(Mu, Sigma, color = logit_prediction)) +
+  geom_point() +
+  facet_grid(
+    cols = vars(Group), labeller = labeller(Group = c(
+      group_1 = "Actual Group 1",
+      group_2 = "Actual Group 2"))
+  ) +
+  scale_color_viridis_d(name = "Logit Predictions", labels = c("Group 1", "Group 2")) +
+  labs(title = "Logit Solution Classification Shows Demarcation",
+       subtitle = "A few mistakes near the edge")
+```
+
+```{r Logit-interpret-centers, message=FALSE, warning=FALSE}
+compare_predictions_groups <- bind_rows(
+  "prediction" = dis_df_logit %>%
+    group_by(logit_prediction) %>% 
+    summarise_if(is.numeric, mean) %>% 
+    rename(Group = logit_prediction) %>% 
+    ungroup(),
+  "data" = dis_df %>% 
+    group_by(Group) %>% 
+    summarise_if(is.numeric, mean), .id = "label"
+  ) %>% 
+  arrange(Mu)
+```
+
+```{r Logit-kable-k2-centers, echo=FALSE}
+kable(compare_predictions_groups, "html", caption = "Prediction means are close to actual group means") %>% 
+  kable_styling("striped", "hold_position")
+```
+
+```{r}
+compare_proportions <- bind_rows("logit" =  logit_predictions %>% 
+                                   janitor::tabyl(Group),
+                                 "data" = dis_df %>% 
+                                   janitor::tabyl(Group), .id = "label") %>% 
+  arrange(Group)
+```
+
+```{r Logit-proportions, echo=FALSE}
+kable(compare_proportions, "html", caption = "Logit vs. Data: Proportions are Similar") %>% 
+  kable_styling("striped", "hold_position")
+```
+
+## Clustering
+Next, k-means clustering will be used to see if we reach the same conclusion as logistic regression.
+
+### Preprocess data for k-means with train/test split and scaling data.
+```{r Preprocess-kmeans}
+set.seed(1)
+test_train_km <- initial_split(dis_df, prop = 79/125)
+
+dis_df_train_km <- training(test_train_km)
+dis_df_test_km <- testing(test_train_km)
+
+dis_train_scaled_recipe <- dis_df_train_km %>%
+  recipe() %>%
+  step_rm(Group) %>% 
+  steps::step_scale_min_max(all_numeric())
+
+dis_train_scaled_prep <- prep(dis_train_scaled_recipe, training = dis_df_train_km, retain = TRUE)
+
+dis_train_scaled <- juice(dis_train_scaled_prep)
+dis_test_scaled <- bake(dis_train_scaled_prep, newdata = dis_df_test_km)
+```
+
+### Generate the k-means
+```{r Kmeans-exploration, warning=FALSE}
+# 1. Run kmeans for 2-10 total clusters.
+kclusters <- data.frame(k = 2:5) %>% 
+  group_by(k) %>% 
+  do(kclust = kmeans(dis_train_scaled, .$k, iter.max = 100, nstart = 100))
+
+# 2. Save the VAF (Variance Inflation Factor) for each number of clusters
+clusterings <- kclusters %>%
+  group_by(k) %>%
+  do(glance(.$kclust[[1]])) %>% 
+  mutate(VAF = betweenss / totss)
+
+# 3/4 Size of the clusters & Centroids of the clusters
+clusters <- kclusters %>%
+  group_by(k) %>%
+  do(tidy(.$kclust[[1]])) %>%
+  mutate(size_prop = size / nrow(dis_train_scaled)) %>% 
+  select(k, size, size_prop, cluster, everything())
+
+assignments <- kclusters %>%
+  group_by(k) %>%
+  do(augment(.$kclust[[1]], dis_train_scaled))
+```
+
+### The Scree plot 
+There is a slight elbow at 3 k's.
+```{r Scree-test}
+clusterings %>% 
+  ggplot(aes(k, VAF)) + 
+  geom_line() +
+  geom_point() +
+  scale_x_continuous(breaks = seq(min(clusterings$k), max(clusterings$k), 1)) +
+  scale_y_continuous(labels = scales::percent) +
+  labs(title = "Variance Accounted for Across k's", 
+       y = "VAF")
+```
+
+However, interestingly, there is an even split for `k = 2`. This may suggest two distinct groups.
+```{r Compare-size-clusters}
+clusters %>% 
+  ggplot(aes(factor(k), size_prop)) +
+  geom_col(aes(fill = size_prop), color = "white") +
+  scale_fill_viridis_c(name = "Cluster Size\nProportion", labels = scales::percent) +
+  scale_y_continuous(labels = scales::percent) +
+  labs(title = "Comparing Cluster Size Across k",
+       x = "Number of Clusters", y = "Cluster Size Proportion of Training Count") +
+  theme(legend.title = element_text(size = 10))
+```
+
+Fit k-means with 2 clusters:
+```{r}
+kmclusters_k2 <- kmeans(dis_train_scaled, centers = 2, iter.max = 100, nstart = 1000)
+assignment_k2 <- augment(kmclusters_k2, dis_train_scaled) %>% 
+  mutate(Group = dis_df_train_km$Group,
+         Mu = dis_df_train_km$Mu,
+         Sigma = dis_df_train_km$Sigma,
+         cluster = factor(.cluster, levels = c(1, 2))) %>% 
+  select(-.cluster)
+```
+
+### Visualize clusters with group labels
+K-means does a good job of separating the known groups:
+```{r}
+assignment_k2 %>% 
+  ggplot(aes(Mu, Sigma, color = cluster)) +
+  geom_point() +
+  facet_grid(
+    cols = vars(Group), labeller = labeller(Group = c(
+      group_1 = "Group 1",
+      group_2 = "Group 2"))
+  ) +
+  scale_color_viridis_d(name = "Cluster") +
+  labs(title = "K-means Cluster Solution Shows Difference in Groups",
+       subtitle = "Demarcation is clear, with some mistakes near the edge")
+```
+
+```{r K-means-interpret-centers, message=FALSE, warning=FALSE}
+compare_clusters_groups <- bind_rows(
+  centers_k2 <- assignment_k2 %>%
+    group_by(cluster) %>% 
+    summarise_if(is.numeric, mean) %>% 
+    rename(`cluster/group` = cluster),
+  dis_df %>% 
+    group_by(Group) %>% 
+    summarise_if(is.numeric, mean) %>% 
+    rename(`cluster/group` = Group)
+) %>% 
+  arrange(Mu)
+```
+
+```{r Cluster-kable-k2-centers, echo=FALSE}
+kable(compare_clusters_groups, "html", caption = "Cluster means are close to actual group means") %>% 
+  kable_styling("striped", "hold_position")
+```
+
+### Holdout
+Holdout results are stable relative to train, so the solution is credible. Groups appear to be different.
+```{r}
+km_holdout_k2 <- kmeans(dis_test_scaled, centers = kmclusters_k2$centers)
+assignment_k2_holdout <- augment(km_holdout_k2, dis_test_scaled) %>% 
+  mutate(Group = dis_df_test_km$Group,
+         Mu = dis_df_test_km$Mu,
+         Sigma = dis_df_test_km$Sigma,
+         cluster = factor(.cluster, levels = c(1, 2))) %>% 
+  select(-.cluster)
+```
+
+```{r}
+assignment_k2_holdout %>% 
+  ggplot(aes(Mu, Sigma, color = cluster)) +
+  geom_point() +
+  facet_grid(
+    cols = vars(Group), labeller = labeller(Group = c(
+      group_1 = "Group 1",
+      group_2 = "Group 2"))
+  ) +
+  scale_color_viridis_d(name = "Cluster") +
+  labs(title = "Stable Holdout")
+```
+
+```{r Interpret-centers, message=FALSE, warning=FALSE}
+compare_clusters_holdout_groups <- bind_rows(
+  centers_k2 <- assignment_k2_holdout %>%
+    group_by(cluster) %>% 
+    summarise_if(is.numeric, mean) %>% 
+    rename(`cluster/group` = cluster),
+  dis_df %>% 
+    group_by(Group) %>% 
+    summarise_if(is.numeric, mean) %>% 
+    rename(`cluster/group` = Group)
+) %>% 
+  arrange(Mu)
+```
+
+```{r kable-k4-centers, echo=FALSE}
+kable(compare_clusters_holdout_groups, "html", caption = "Holdout means are stable and reach the same conclusion") %>% 
+  kable_styling("striped", "hold_position")
+```
+
+# Analyze convergence of MCMC in section 5.1.4 of part 2 of the workshop. Try to adjust parameters and rerun the process to obtain the a better quality of MCMC.
+
+## Data 
+Read the data and create the data list.
+```{r Data-HierLinRegressData.csv}
+df <- read.csv("DBDA2Eprograms/HierLinRegressData.csv")
+
+dataList <- list(
+  Ntotal = length(df$Y),
+  y = df$Y,
+  x = df$X,
+  Ngroups = max(df$Subj),
+  group = df$Subj
+)
+```
+
+## Original Stan model
+```{stan output.var="stanDsoRobustRegPanel", eval=FALSE}
+data {
+    int<lower=1> Ntotal;
+    vector[Ntotal] y;
+    vector[Ntotal] x;
+    int<lower=1> Ngroups;
+    int<lower=1, upper=Ngroups> group[Ntotal];
+}
+transformed data {
+    real meanY;
+    real sdY;
+    vector[Ntotal] zy; // normalized y
+    real meanX;
+    real sdX;
+    vector[Ntotal] zx; // normalized x
+    meanY = mean(y);
+    sdY = sd(y);
+    zy = (y - meanY) / sdY;
+    meanX = mean(x);
+    sdX = sd(x);
+    zx = (x - meanX) / sdX;
+}
+parameters {
+    real<lower=0> zsigma;
+    real<lower=0> nu;
+    real zbeta0mu;
+    real zbeta1mu;
+    real<lower=0> zbeta0sigma;
+    real<lower=0> zbeta1sigma;
+    vector[Ngroups] zbeta0;
+    vector[Ngroups] zbeta1;
+}
+transformed parameters {
+    real<lower=0> sigma;
+    real beta0mu;
+    real beta1mu;
+    vector[Ngroups] beta0;
+    vector[Ngroups] beta1;
+    // Transform to original scale:
+    sigma = zsigma * sdY;
+    beta0mu = meanY + zbeta0mu * sdY  - zbeta1mu * meanX * sdY / sdX;
+    beta1mu = zbeta1mu * sdY / sdX;
+    beta0 = meanY + zbeta0 * sdY  - zbeta1 * meanX * sdY / sdX; // vectorized
+    beta1 = zbeta1 * sdY / sdX;                                 // vectorized
+}
+model {
+    zsigma ~ uniform(0.001, 1000);
+    nu ~ exponential(1/30.0);
+    zbeta0mu ~ normal(0, 10.0^2);
+    zbeta1mu ~ normal(0, 10.0^2);
+    zbeta0sigma ~ uniform(0.001, 1000);
+    zbeta1sigma ~ uniform(0.001, 1000);
+    zbeta0 ~ normal(zbeta0mu, zbeta0sigma);  // vectorized
+    zbeta1 ~ normal(zbeta1mu, zbeta1sigma);  // vectorized
+    for (i in 1:Ntotal) {
+        zy[i] ~ student_t(1+nu, zbeta0[group[i]] + zbeta1[group[i]] * x[i], zsigma);
+    }
+}
+```
+
+## Fit original Stan model
+```{r, eval=FALSE}
+fit_robust <- sampling (
+  stanDsoRobustRegPanel,
+  data = dataList,
+  pars = c(
+    "nu",
+    "sigma",
+    "beta0mu",
+    "beta1mu",
+    "beta0",
+    "beta1",
+    "zbeta0sigma",
+    "zbeta1sigma"
+  ),
+  iter = 5000,
+  chains = 4,
+  cores = 4
+)
+```
+
+```{r, eval=FALSE, echo=FALSE}
+save(fit_robust, file = "fit_robust_week7_q2_cauchy_assignment.rda")
+```
+
+```{r, echo=FALSE}
+load("fit_robust_week7_q2_assignment.rda")
+```
+
+There were 1843 divergent transitions after warmup. The workshop tries to decrease `stepsize` and increase `iter`, `adapt_delta`, and `max_treedepth`. 
+```{r, eval=FALSE}
+fit_robust_adjust <- sampling (
+  stanDsoRobustRegPanel,
+  data = dataList,
+  pars = c(
+    "nu",
+    "sigma",
+    "beta0mu",
+    "beta1mu",
+    "beta0",
+    "beta1",
+    "zbeta0sigma",
+    "zbeta1sigma"
+  ),
+  iter = 50000,
+  chains = 4,
+  cores = 4,
+  control = list(
+    adapt_delta = 0.999,
+    stepsize = 0.01,
+    max_treedepth = 15
+  )
+)
+```
+
+```{r, eval=FALSE, echo=FALSE}
+save(fit_robust_adjust, file = "fit_robust_adjust_week7_q2_cauchy_assignment.rda")
+```
+
+
+```{r, echo=FALSE}
+load("fit_robust_adjust_week7_q2_cauchy_assignment.rda")
+```
+
+However, many divergences still occurr: 
+```{r}
+plot(fit_robust_adjust)
+rstan::traceplot(fit_robust_adjust)
+pairs(fit_robust_adjust, pars = c("nu", "sigma", "beta0mu", "beta1mu"))
+```
+
+Adjusting prior for `zsigma` `zbeta0sigma`, and `zbeta0sigma` to `cauchy`:
+```{stan output.var="stanDsoRobustRegPanel_cauchy", eval=FALSE}
+data {
+    int<lower=1> Ntotal;
+    vector[Ntotal] y;
+    vector[Ntotal] x;
+    int<lower=1> Ngroups;
+    int<lower=1, upper=Ngroups> group[Ntotal];
+}
+transformed data {
+    real meanY;
+    real sdY;
+    vector[Ntotal] zy; // normalized y
+    real meanX;
+    real sdX;
+    vector[Ntotal] zx; // normalized x
+    meanY = mean(y);
+    sdY = sd(y);
+    zy = (y - meanY) / sdY;
+    meanX = mean(x);
+    sdX = sd(x);
+    zx = (x - meanX) / sdX;
+}
+parameters {
+    real<lower=0> zsigma;
+    real<lower=0> nu;
+    real zbeta0mu;
+    real zbeta1mu;
+    real<lower=0> zbeta0sigma;
+    real<lower=0> zbeta1sigma;
+    vector[Ngroups] zbeta0;
+    vector[Ngroups] zbeta1;
+}
+transformed parameters {
+    real<lower=0> sigma;
+    real beta0mu;
+    real beta1mu;
+    vector[Ngroups] beta0;
+    vector[Ngroups] beta1;
+    // Transform to original scale:
+    sigma = zsigma * sdY;
+    beta0mu = meanY + zbeta0mu * sdY  - zbeta1mu * meanX * sdY / sdX;
+    beta1mu = zbeta1mu * sdY / sdX;
+    beta0 = meanY + zbeta0 * sdY  - zbeta1 * meanX * sdY / sdX; // vectorized
+    beta1 = zbeta1 * sdY / sdX;                                 // vectorized
+}
+model {
+    zsigma ~ cauchy(0, 2);
+    nu ~ exponential(1/30.0);
+    zbeta0mu ~ normal(0, 10.0^2);
+    zbeta1mu ~ normal(0, 10.0^2);
+    zbeta0sigma ~ cauchy(0, 2);
+    zbeta1sigma ~ cauchy(0, 2);
+    zbeta0 ~ normal(zbeta0mu, zbeta0sigma);  // vectorized
+    zbeta1 ~ normal(zbeta1mu, zbeta1sigma);  // vectorized
+    for (i in 1:Ntotal) {
+        zy[i] ~ student_t(1+nu, zbeta0[group[i]] + zbeta1[group[i]] * x[i], zsigma);
+    }
+}
+
+```
+
+Additionally, decreasing `stepsize` and increasing `warmup`, `iter`, `adapt_delta`, and `max_treedepth`:
+```{r, eval=FALSE}
+fit_robust_cauchy <- sampling(
+  stanDsoRobustRegPanel_cauchy,
+  data = dataList,
+  pars = c(
+    "nu",
+    "sigma",
+    "beta0mu",
+    "beta1mu",
+    "beta0",
+    "beta1",
+    "zbeta0sigma",
+    "zbeta1sigma"
+  ),
+  iter = 5000,
+  chains = 4,
+  cores = 4,
+  warmup = 1500,
+  thin = 5,
+  control = list(
+    adapt_delta = 0.999999999,
+    stepsize = 0.0001,
+    max_treedepth = 20
+  )
+)
+```
+
+```{r, eval=FALSE, echo=FALSE}
+save(fit_robust_cauchy, file = "fit_robust_cauchy_week7_q2_assignment.rda")
+```
+
+```{r, echo=FALSE}
+load("fit_robust_cauchy_week7_q2_assignment.rda")
+```
+
+```{r}
+pairs(fit_robust_cauchy, pars = c("nu", "sigma", "beta0mu", "beta1mu"))
+```
+
+There is an auto-correlation problem with the $\beta0\mu$ and $\beta1\mu$
+```{r}
+stan_ac(fit_robust_cauchy, pars = c("nu", "sigma", "beta0mu", "beta1mu"))
+```
+
+By adjusting priors to `cauchy` and increasing several parameters, we were able to dramatically reduce the divergences from ~1800 to 3. However, the drawback to this approach (compared to parameterizing the model better based on understanding of the data) is speed. The model takes much longer to fit with a small step size. And while increasing the warmup ameliorates the auto-correlation, it does not fix it completely.
+
+# Using `life_exp` as response fit Gaussian and robust non-hierarchical regression models using Bayesian approach
+## Data
+
+`state.x77` from datasets used in multiple regression example in Statistical Analysis (MScA 31007):
+```{r}
+dta <- as.data.frame(state.x77) %>% 
+  janitor::clean_names()
+```
+
+```{r echo=FALSE}
+kable(dta %>% head(), caption = "`stat.x77`")
+```
+
+```{r}
+data_list <- list(
+  Ntotal = nrow(dta),
+  life_exp = dta$life_exp
+)
+```
+
+## Models
+
+Fitting intercept only models. First normal, then robust.
+
+### Normal
+```{stan output.var="stan_normal_model"}
+data {
+    int<lower=0> Ntotal;
+    vector<lower=0>[Ntotal] life_exp;
+}
+transformed data {
+    real mean_life_exp;
+    real sd_life_exp;
+    real unifLo;
+    real unifHi;
+    mean_life_exp = mean(life_exp);
+    sd_life_exp = sd(life_exp);
+    unifLo = sd_life_exp / 1000;
+    unifHi = sd_life_exp * 1000;
+}
+parameters {
+	real beta0;
+	real <lower=0> sigma;
+}
+model {
+  sigma ~ uniform(unifLo, unifHi);
+  life_exp ~ normal(beta0, sigma);
+}
+```
+
+```{r}
+fit_normal_life_exp <- sampling(
+  stan_normal_model,
+  data = data_list,
+  pars = c(
+    "beta0",
+    "sigma"
+  ),
+  iter = 5000,
+  chains = 4,
+  cores = 4,
+)
+```
+
+Model estimates mean of `life_exp`:
+```{r}
+show(fit_normal_life_exp)
+```
+
+Data mean: `r mean(dta$life_exp)`
+
+All model diagnostics looks good:
+```{r}
+pairs(fit_normal_life_exp, pars = c("beta0", "sigma"))
+stan_trace(fit_normal_life_exp, pars = c("beta0", "sigma"))
+stan_ac(fit_normal_life_exp, pars = c("beta0", "sigma"))
+stan_dens(fit_normal_life_exp, pars = c("beta0", "sigma"))
+stan_diag(fit_normal_life_exp)
+```
+
+### Robust
+```{stan output.var="stan_robust_model"}
+data {
+    int<lower=1> Ntotal;
+    vector<lower=0>[Ntotal] life_exp;
+}
+transformed data {
+    real expLambda;
+    real mean_life_exp;
+    real sd_life_exp;
+    real unifLo;
+    real unifHi;
+    expLambda = 1 / 30.0;
+    mean_life_exp = mean(life_exp);
+    sd_life_exp = sd(life_exp);
+    unifLo = sd_life_exp / 1000;
+    unifHi = sd_life_exp * 1000;
+}
+parameters {
+    real<lower=0> nu; 
+    real beta0;
+    real<lower=0> sigma;
+}
+model {
+  nu ~ exponential(expLambda);
+  sigma ~ uniform(unifLo, unifHi);
+  life_exp ~ student_t(nu, beta0, sigma);
+}
+```
+
+```{r}
+fit_robust_life_exp <- sampling(
+  stan_robust_model,
+  data = data_list,
+  pars = c(
+    "beta0",
+    "sigma",
+    "nu"
+  ),
+  iter = 5000,
+  chains = 4,
+  cores = 4,
+)
+```
+
+$\nu$ is high, so probably Gaussian.
+```{r}
+show(fit_robust_life_exp)
+plot(fit_robust_life_exp)
+```
+
+Slight memory in $\sigma$ and $\beta$:
+```{r}
+pairs(fit_robust_life_exp, pars = c("beta0", "sigma", "nu"))
+stan_trace(fit_robust_life_exp, pars = c("beta0", "sigma", "nu"))
+stan_ac(fit_robust_life_exp, pars = c("beta0", "sigma", "nu"))
+stan_dens(fit_robust_life_exp, pars = c("beta0", "sigma", "nu"))
+stan_diag(fit_robust_life_exp)
+```
+
+### Trying with predictor `hs_grad`
+
+```{r}
+model_df <- dta %>% select(hs_grad)
+data_list <- list(
+  Ntotal = nrow(dta),
+  Nx = ncol(model_df),
+  x = as.matrix(model_df),
+  life_exp = dta$life_exp
+)
+```
+
+```{stan output.var="stan_normal_predictors"}
+data {
+    int<lower=1> Ntotal;
+    int<lower=1> Nx;
+    vector[Ntotal] life_exp;
+    matrix[Ntotal, Nx] x;
+}
+transformed data {
+    real expLambda;
+    real mean_life_exp;
+    real sd_life_exp;
+    real unifLo;
+    real unifHi;
+    mean_life_exp = mean(life_exp);
+    sd_life_exp = sd(life_exp);
+    unifLo = sd_life_exp / 1000;
+    unifHi = sd_life_exp * 1000;
+}
+parameters {
+    real beta0;
+    vector[Nx] xbeta;
+    real<lower=0> sigma;
+}
+model {
+  sigma ~ uniform(unifLo, unifHi);
+  life_exp ~ normal(beta0 + x * xbeta, sigma);
+}
+```
+
+```{r}
+fit_normal_life_exp_predictors <- sampling(
+  stan_normal_predictors,
+  data = data_list,
+  pars = c(
+    "beta0",
+    "xbeta",
+    "sigma"
+  ),
+  iter = 5000,
+  chains = 4,
+  cores = 4,
+)
+```
+
+Initial takeaways from first model:
+
+* `beta0` is now 65.75 (down from the mean of 70.88), so average `life_exp` is 65.75 when there are no high school grads
+
+* However, `hs_grad` is significant and increases `life_expectancy` for every one unit change in `hs_grad`
+
+```{r}
+show(fit_normal_life_exp_predictors)
+plot(fit_normal_life_exp_predictors, pars = "xbeta")
+```
+
+* There is memory in $\sigma$ and betas
+
+* `beta0` and `beta1` show a strong negative relationship
+
+```{r}
+pairs(fit_normal_life_exp_predictors, pars = c("beta0", "xbeta", "sigma"))
+stan_trace(fit_normal_life_exp_predictors, pars = c("beta0", "xbeta", "sigma"))
+stan_ac(fit_normal_life_exp_predictors, pars = c("beta0", "xbeta", "sigma"))
+stan_dens(fit_normal_life_exp_predictors, pars = c("beta0", "xbeta", "sigma"))
+stan_diag(fit_normal_life_exp_predictors)
+```
+
+## Takeaways
+
+* Question 1 data was proven distinct between classes based on logistic and k-means; there were clear distinctions between groups with both methods 
+
+* Question 2 was unsolvable; however, we were able to significantly reduce divergences at the cost of painfully slower computation
+
+* No issues with any model diagnostics for all models in question 3
+
+* Intercept models simply estimated the mean from the data (no surprise)
+
+* Robust model was unnecessary due to high $\nu$, so Gaussian will likely be fine
+
+* `hs_grad` showed to be significant with a positive loading when viewing HDI
+||||||| merged common ancestors
+=======
+---
+title: "Week 7 Assignment"
+author: "Joshua Goldberg"
+date: "`r format(Sys.time(), '%B, %d %Y')`"
+always_allow_html: yes
+output:
+  github_document:
+  html_document:
+    theme: united
+    df_print: paged
+    highlight: textmate
+    code_folding: show
+    toc: true
+    toc_float: true
+editor_options: 
+  chunk_output_type: inline
+---
+
+```{r Global-options, include=FALSE}
+knitr::opts_chunk$set(fig.width=6, fig.asp=0.618, fig.path='Figs/',
+                      warning=FALSE, message=FALSE, cache=TRUE)
+```
+
+```{r Preamble, echo=FALSE}
+# Enter package in p_load()
+# If package is not installed, p_load() will install and load the package
+if(!"pacman" %in% rownames(installed.packages())) {
+  install.packages("pacman")
+  }
+pacman::p_load(tidyverse, ggthemes, here, rstan, caret, recipes, rsample, purrr, tictoc, knitr, kableExtra)
+
+# Set default ggplot theme to tufte
+theme_set(ggthemes::theme_tufte())
+
+# Parallel Stan
+rstan_options(auto_write = TRUE)
+options(mc.cores = parallel::detectCores())
+```
+
+```{r Copy-files, echo=FALSE, eval=FALSE}
+# Enter files to load to project directory in from = "~/Downloads/your_file_name_here"
+file.copy(from = "~/Downloads/", to = here::here(), 
+          overwrite = TRUE, recursive = FALSE, 
+          copy.mode = TRUE)
+```
+
+# References 
+[K] John K. Kruschke, Doing Bayesian Data Analysis, A Tutorial with R, JAGS, and STAN, 2015, Elsevier.
+
+Source the utilities file from [K].
+```{r}
+source("./DBDA2Eprograms/DBDA2E-utilities.R")
+```
+
+This project helps understanding comparison of groups in Gaussian model without predictors.
+
+# Use at least 2 different methods proving that the groups in section 3.3 of part 1 of the workshop are different.
+
+## Data
+```{r Data-TwoGroupIQ.csv}
+myDataFrame = read.csv("documents-MScA Bayesian Methods (32014)-MScA 32014 Lecture 8-TwoGroupIQ.csv")
+y = as.numeric(myDataFrame[, "Score"])
+x = as.numeric(as.factor(myDataFrame[, "Group"]))
+(xLevels = levels(as.factor(myDataFrame[, "Group"])))
+```
+
+```{r}
+Ntotal = length(y)
+dataList = list(
+  y = y,
+  x = x,
+  Ntotal = Ntotal,
+  meanY = mean(y),
+  sdY = sd(y)
+)
+dataList
+```
+
+## Robust model
+Robust assumption of Student-t distribution.
+```{stan, output.var="stanDsoRobust"}
+data {
+    int<lower=1> Ntotal;
+    int x[Ntotal];          //Group variable
+    real y[Ntotal];
+    real meanY;
+    real sdY;
+}
+transformed data {
+    real unifLo;
+    real unifHi;
+    real normalSigma;
+    real expLambda;         //Parameter of prior for nu 
+    unifLo = sdY/100;
+    unifHi = sdY*100;
+    normalSigma = sdY*100;
+    expLambda = 1/30.0;      //Setting value for expLambda
+}
+parameters {
+    real<lower=0> nu;
+    real mu[2];                 //Making 2 groups
+    real<lower=0> sigma[2];     //Making 2 groups
+}
+model {
+    sigma ~ uniform(unifLo, unifHi);        //Recall that sigma is a vector of 2 numbers
+    mu ~ normal(meanY, normalSigma);        //Recall that mu is a vector of 2 numbers
+    nu~exponential(expLambda);      //Exponential prior for nu
+    for (i in 1:Ntotal){
+        y[i] ~ student_t(nu, mu[x[i]], sigma[x[i]]);           //Student_t distribution for y with nested group index
+    }
+    
+}
+```
+
+### Fit `stanmodel` with `sampling()`
+```{r}
+parameters = c("mu" , "sigma" , "nu")     # The parameters to be monitored
+adaptSteps = 500               # Number of steps to "tune" the samplers
+burnInSteps = 1000
+nChains = 4
+thinSteps = 1
+numSavedSteps <- 5000
+
+# Get MC sample of posterior:
+stanFitRobust <- sampling(
+  object = stanDsoRobust,
+  data = dataList,
+  pars = parameters,
+  # optional
+  chains = nChains,
+  cores = nChains,
+  iter = (ceiling(numSavedSteps / nChains) * thinSteps
+          + burnInSteps),
+  warmup = burnInSteps,
+  init = "random",
+  # optional
+  thin = thinSteps
+)
+```
+
+### Fit results
+```{r}
+stanFitRobust
+```
+
+```{r}
+plot(stanFitRobust)
+rstan::traceplot(stanFitRobust, ncol = 1, inc_warmup = F)
+pairs(stanFitRobust, pars = c("nu","mu","sigma"))
+stan_diag(stanFitRobust,information = "sample",chain = 0)
+```
+
+Same fit results from the workshop, of course.
+
+## Extract $\mu$ and $\sigma$ from chains to measure difference between the two groups
+```{r}
+dis1 <- data.frame(
+  Mu = rstan::extract(stanFitRobust, pars = "mu[1]")$'mu[1]',
+  Sigma = rstan::extract(stanFitRobust, pars = "sigma[1]")$'sigma[1]'
+)
+
+dis2 <- data.frame(
+  Mu = rstan::extract(stanFitRobust, pars = "mu[2]")$'mu[2]',
+  Sigma = rstan::extract(stanFitRobust, pars = "sigma[2]")$'sigma[2]'
+)
+
+dis_df <- bind_rows("group_1" = dis1, "group_2" = dis2, .id = "Group") %>% 
+  mutate(Group = factor(Group)) %>% as_tibble()
+
+denDis1 <- density(dis1[, "Mu"])
+denDis2 <- density(dis2[, "Mu"])
+plot(denDis1, col = "blue", xlim = c(90, 120))
+lines(denDis2, col = "green")
+```
+
+## Two different methods to distinguish groups
+```{r Correlation, echo=FALSE, include=FALSE}
+ggcor <- function(df, ...) {
+  factors <- enquos(...)
+  cor_matrix <- cor(dis_df %>% mutate_at(vars(!!! factors), as.numeric) %>% select_if(is.numeric))
+  
+  # Get lower triangle of the correlation matrix
+  get_lower_tri <- function(cormat) {
+    cormat[upper.tri(cormat)] <- NA
+    return(cormat)
+  }
+  
+  # Get upper triangle of the correlation matrix
+  get_upper_tri <- function(cormat) {
+    cormat[lower.tri(cormat)] <- NA
+    return(cormat)
+  }
+  
+  reorder_cormat <- function(cormat) {
+    # Use correlation between variables as distance
+    dd <- as.dist((1 - cormat) / 2)
+    hc <- hclust(dd)
+    cormat <- cormat[hc$order, hc$order]
+  }
+  
+  # Reorder the correlation matrix
+  cormat <- reorder_cormat(cor_matrix)
+  tri <- get_upper_tri(cormat)
+  
+  # Melt the correlation matrix
+  melted_cormat <- reshape2::melt(tri, na.rm = TRUE) %>%
+    mutate(value = round(value, 2))
+  
+  ggheatmap <- ggplot(melted_cormat, aes(Var2, Var1, fill = value)) +
+    geom_tile(color = "white") +
+    scale_fill_gradient2(
+      low = "blue",
+      high = "red",
+      mid = "white",
+      midpoint = 0,
+      limit = c(-1, 1),
+      space = "Lab",
+      name = "Pearson\nCorrelation"
+    ) +
+    theme_minimal() + # minimal theme
+    theme(axis.text.x = element_text(
+      angle = 45,
+      vjust = 1,
+      size = 12,
+      hjust = 1
+    )) +
+    coord_fixed()
+  
+  ggheatmap +
+    geom_text(aes(Var2, Var1, label = value), color = "black", size = 3) +
+    theme(
+      axis.title.x = element_blank(),
+      axis.title.y = element_blank(),
+      panel.grid.major = element_blank(),
+      panel.border = element_blank(),
+      panel.background = element_blank(),
+      axis.ticks = element_blank(),
+      legend.justification = c(1, 0),
+      legend.position = c(0.6, 0.7),
+      legend.direction = "horizontal"
+    ) +
+    guides(fill = guide_colorbar(
+      barwidth = 7,
+      barheight = 1,
+      title.position = "top",
+      title.hjust = 0.5
+    ))
+}
+```
+
+## Correlation matrix
+There is a positive correlation between `Mu` and `Sigma`, suggesting higher values for `group_2`.
+```{r}
+ggcor(dis_df, Group)
+```
+
+## Logistic
+We will use logistic regression to see if predictability of groups can be achieved with `Mu` and `Sigma`.
+```{r}
+rec <- recipe(Group ~ Mu + Sigma, data = dis_df)
+  
+control <- trainControl(
+  method = "cv",
+  number = 10,
+  summaryFunction = twoClassSummary,
+  classProbs = TRUE,
+  savePredictions = TRUE
+)
+
+fit_logit <- train(
+  rec,
+  data = dis_df,
+  metric = "ROC",
+  method = "glm",
+  trControl = control,
+  family = binomial(link = "logit")
+) 
+```
+
+Summary of model shows that both `Mu` and `Sigma` are statistically significant for predicting `Group`.
+```{r}
+summary(fit_logit)
+```
+
+### Visualize predictions with group labels
+```{r}
+logit_predictions <- predict.train(fit_logit) %>%
+            data.frame(Group = .)
+
+dis_df_logit <- dis_df %>% mutate(logit_prediction = factor(logit_predictions$Group, levels = c("group_1", "group_2")))
+
+dis_df_logit %>% 
+  ggplot(aes(Mu, Sigma, color = logit_prediction)) +
+  geom_point() +
+  facet_grid(
+    cols = vars(Group), labeller = labeller(Group = c(
+      group_1 = "Actual Group 1",
+      group_2 = "Actual Group 2"))
+  ) +
+  scale_color_viridis_d(name = "Logit Predictions", labels = c("Group 1", "Group 2")) +
+  labs(title = "Logit Solution Classification Shows Demarcation",
+       subtitle = "A few mistakes near the edge")
+```
+
+```{r Logit-interpret-centers, message=FALSE, warning=FALSE}
+compare_predictions_groups <- bind_rows(
+  "prediction" = dis_df_logit %>%
+    group_by(logit_prediction) %>% 
+    summarise_if(is.numeric, mean) %>% 
+    rename(Group = logit_prediction) %>% 
+    ungroup(),
+  "data" = dis_df %>% 
+    group_by(Group) %>% 
+    summarise_if(is.numeric, mean), .id = "label"
+  ) %>% 
+  arrange(Mu)
+```
+
+```{r Logit-kable-k2-centers, echo=FALSE}
+kable(compare_predictions_groups, "html", caption = "Prediction means are close to actual group means") %>% 
+  kable_styling("striped", "hold_position")
+```
+
+```{r}
+compare_proportions <- bind_rows("logit" =  logit_predictions %>% 
+                                   janitor::tabyl(Group),
+                                 "data" = dis_df %>% 
+                                   janitor::tabyl(Group), .id = "label") %>% 
+  arrange(Group)
+```
+
+```{r Logit-proportions, echo=FALSE}
+kable(compare_proportions, "html", caption = "Logit vs. Data: Proportions are Similar") %>% 
+  kable_styling("striped", "hold_position")
+```
+
+## Clustering
+Next, k-means clustering will be used to see if we reach the same conclusion as logistic regression.
+
+### Preprocess data for k-means with train/test split and scaling data.
+```{r Preprocess-kmeans}
+set.seed(1)
+test_train_km <- initial_split(dis_df, prop = 79/125)
+
+dis_df_train_km <- training(test_train_km)
+dis_df_test_km <- testing(test_train_km)
+
+dis_train_scaled_recipe <- dis_df_train_km %>%
+  recipe() %>%
+  step_rm(Group) %>% 
+  steps::step_scale_min_max(all_numeric())
+
+dis_train_scaled_prep <- prep(dis_train_scaled_recipe, training = dis_df_train_km, retain = TRUE)
+
+dis_train_scaled <- juice(dis_train_scaled_prep)
+dis_test_scaled <- bake(dis_train_scaled_prep, newdata = dis_df_test_km)
+```
+
+### Generate the k-means
+```{r Kmeans-exploration, warning=FALSE}
+# 1. Run kmeans for 2-10 total clusters.
+kclusters <- data.frame(k = 2:5) %>% 
+  group_by(k) %>% 
+  do(kclust = kmeans(dis_train_scaled, .$k, iter.max = 100, nstart = 100))
+
+# 2. Save the VAF (Variance Inflation Factor) for each number of clusters
+clusterings <- kclusters %>%
+  group_by(k) %>%
+  do(glance(.$kclust[[1]])) %>% 
+  mutate(VAF = betweenss / totss)
+
+# 3/4 Size of the clusters & Centroids of the clusters
+clusters <- kclusters %>%
+  group_by(k) %>%
+  do(tidy(.$kclust[[1]])) %>%
+  mutate(size_prop = size / nrow(dis_train_scaled)) %>% 
+  select(k, size, size_prop, cluster, everything())
+
+assignments <- kclusters %>%
+  group_by(k) %>%
+  do(augment(.$kclust[[1]], dis_train_scaled))
+```
+
+### The Scree plot 
+There is a slight elbow at 3 k's.
+```{r Scree-test}
+clusterings %>% 
+  ggplot(aes(k, VAF)) + 
+  geom_line() +
+  geom_point() +
+  scale_x_continuous(breaks = seq(min(clusterings$k), max(clusterings$k), 1)) +
+  scale_y_continuous(labels = scales::percent) +
+  labs(title = "Variance Accounted for Across k's", 
+       y = "VAF")
+```
+
+However, interestingly, there is an even split for `k = 2`. This may suggest two distinct groups.
+```{r Compare-size-clusters}
+clusters %>% 
+  ggplot(aes(factor(k), size_prop)) +
+  geom_col(aes(fill = size_prop), color = "white") +
+  scale_fill_viridis_c(name = "Cluster Size\nProportion", labels = scales::percent) +
+  scale_y_continuous(labels = scales::percent) +
+  labs(title = "Comparing Cluster Size Across k",
+       x = "Number of Clusters", y = "Cluster Size Proportion of Training Count") +
+  theme(legend.title = element_text(size = 10))
+```
+
+Fit k-means with 2 clusters:
+```{r}
+kmclusters_k2 <- kmeans(dis_train_scaled, centers = 2, iter.max = 100, nstart = 1000)
+assignment_k2 <- augment(kmclusters_k2, dis_train_scaled) %>% 
+  mutate(Group = dis_df_train_km$Group,
+         Mu = dis_df_train_km$Mu,
+         Sigma = dis_df_train_km$Sigma,
+         cluster = factor(.cluster, levels = c(1, 2))) %>% 
+  select(-.cluster)
+```
+
+### Visualize clusters with group labels
+K-means does a good job of separating the known groups:
+```{r}
+assignment_k2 %>% 
+  ggplot(aes(Mu, Sigma, color = cluster)) +
+  geom_point() +
+  facet_grid(
+    cols = vars(Group), labeller = labeller(Group = c(
+      group_1 = "Group 1",
+      group_2 = "Group 2"))
+  ) +
+  scale_color_viridis_d(name = "Cluster") +
+  labs(title = "K-means Cluster Solution Shows Difference in Groups",
+       subtitle = "Demarcation is clear, with some mistakes near the edge")
+```
+
+```{r K-means-interpret-centers, message=FALSE, warning=FALSE}
+compare_clusters_groups <- bind_rows(
+  centers_k2 <- assignment_k2 %>%
+    group_by(cluster) %>% 
+    summarise_if(is.numeric, mean) %>% 
+    rename(`cluster/group` = cluster),
+  dis_df %>% 
+    group_by(Group) %>% 
+    summarise_if(is.numeric, mean) %>% 
+    rename(`cluster/group` = Group)
+) %>% 
+  arrange(Mu)
+```
+
+```{r Cluster-kable-k2-centers, echo=FALSE}
+kable(compare_clusters_groups, "html", caption = "Cluster means are close to actual group means") %>% 
+  kable_styling("striped", "hold_position")
+```
+
+### Holdout
+Holdout results are stable relative to train, so the solution is credible. Groups appear to be different.
+```{r}
+km_holdout_k2 <- kmeans(dis_test_scaled, centers = kmclusters_k2$centers)
+assignment_k2_holdout <- augment(km_holdout_k2, dis_test_scaled) %>% 
+  mutate(Group = dis_df_test_km$Group,
+         Mu = dis_df_test_km$Mu,
+         Sigma = dis_df_test_km$Sigma,
+         cluster = factor(.cluster, levels = c(1, 2))) %>% 
+  select(-.cluster)
+```
+
+```{r}
+assignment_k2_holdout %>% 
+  ggplot(aes(Mu, Sigma, color = cluster)) +
+  geom_point() +
+  facet_grid(
+    cols = vars(Group), labeller = labeller(Group = c(
+      group_1 = "Group 1",
+      group_2 = "Group 2"))
+  ) +
+  scale_color_viridis_d(name = "Cluster") +
+  labs(title = "Stable Holdout")
+```
+
+```{r Interpret-centers, message=FALSE, warning=FALSE}
+compare_clusters_holdout_groups <- bind_rows(
+  centers_k2 <- assignment_k2_holdout %>%
+    group_by(cluster) %>% 
+    summarise_if(is.numeric, mean) %>% 
+    rename(`cluster/group` = cluster),
+  dis_df %>% 
+    group_by(Group) %>% 
+    summarise_if(is.numeric, mean) %>% 
+    rename(`cluster/group` = Group)
+) %>% 
+  arrange(Mu)
+```
+
+```{r kable-k4-centers, echo=FALSE}
+kable(compare_clusters_holdout_groups, "html", caption = "Holdout means are stable and reach the same conclusion") %>% 
+  kable_styling("striped", "hold_position")
+```
+
+# Analyze convergence of MCMC in section 5.1.4 of part 2 of the workshop. Try to adjust parameters and rerun the process to obtain the a better quality of MCMC.
+
+## Data 
+Read the data and create the data list.
+```{r Data-HierLinRegressData.csv}
+df <- read.csv("DBDA2Eprograms/HierLinRegressData.csv")
+
+dataList <- list(
+  Ntotal = length(df$Y),
+  y = df$Y,
+  x = df$X,
+  Ngroups = max(df$Subj),
+  group = df$Subj
+)
+```
+
+## Original Stan model
+```{stan output.var="stanDsoRobustRegPanel", eval=FALSE}
+data {
+    int<lower=1> Ntotal;
+    vector[Ntotal] y;
+    vector[Ntotal] x;
+    int<lower=1> Ngroups;
+    int<lower=1, upper=Ngroups> group[Ntotal];
+}
+transformed data {
+    real meanY;
+    real sdY;
+    vector[Ntotal] zy; // normalized y
+    real meanX;
+    real sdX;
+    vector[Ntotal] zx; // normalized x
+    meanY = mean(y);
+    sdY = sd(y);
+    zy = (y - meanY) / sdY;
+    meanX = mean(x);
+    sdX = sd(x);
+    zx = (x - meanX) / sdX;
+}
+parameters {
+    real<lower=0> zsigma;
+    real<lower=0> nu;
+    real zbeta0mu;
+    real zbeta1mu;
+    real<lower=0> zbeta0sigma;
+    real<lower=0> zbeta1sigma;
+    vector[Ngroups] zbeta0;
+    vector[Ngroups] zbeta1;
+}
+transformed parameters {
+    real<lower=0> sigma;
+    real beta0mu;
+    real beta1mu;
+    vector[Ngroups] beta0;
+    vector[Ngroups] beta1;
+    // Transform to original scale:
+    sigma = zsigma * sdY;
+    beta0mu = meanY + zbeta0mu * sdY  - zbeta1mu * meanX * sdY / sdX;
+    beta1mu = zbeta1mu * sdY / sdX;
+    beta0 = meanY + zbeta0 * sdY  - zbeta1 * meanX * sdY / sdX; // vectorized
+    beta1 = zbeta1 * sdY / sdX;                                 // vectorized
+}
+model {
+    zsigma ~ uniform(0.001, 1000);
+    nu ~ exponential(1/30.0);
+    zbeta0mu ~ normal(0, 10.0^2);
+    zbeta1mu ~ normal(0, 10.0^2);
+    zbeta0sigma ~ uniform(0.001, 1000);
+    zbeta1sigma ~ uniform(0.001, 1000);
+    zbeta0 ~ normal(zbeta0mu, zbeta0sigma);  // vectorized
+    zbeta1 ~ normal(zbeta1mu, zbeta1sigma);  // vectorized
+    for (i in 1:Ntotal) {
+        zy[i] ~ student_t(1+nu, zbeta0[group[i]] + zbeta1[group[i]] * x[i], zsigma);
+    }
+}
+```
+
+## Fit original Stan model
+```{r, eval=FALSE}
+fit_robust <- sampling (
+  stanDsoRobustRegPanel,
+  data = dataList,
+  pars = c(
+    "nu",
+    "sigma",
+    "beta0mu",
+    "beta1mu",
+    "beta0",
+    "beta1",
+    "zbeta0sigma",
+    "zbeta1sigma"
+  ),
+  iter = 5000,
+  chains = 4,
+  cores = 4
+)
+```
+
+```{r, eval=FALSE, echo=FALSE}
+save(fit_robust, file = "fit_robust_week7_q2_cauchy_assignment.rda")
+```
+
+```{r, echo=FALSE}
+load("fit_robust_week7_q2_assignment.rda")
+```
+
+There were 1843 divergent transitions after warmup. The workshop tries to decrease `stepsize` and increase `iter`, `adapt_delta`, and `max_treedepth`. 
+```{r, eval=FALSE}
+fit_robust_adjust <- sampling (
+  stanDsoRobustRegPanel,
+  data = dataList,
+  pars = c(
+    "nu",
+    "sigma",
+    "beta0mu",
+    "beta1mu",
+    "beta0",
+    "beta1",
+    "zbeta0sigma",
+    "zbeta1sigma"
+  ),
+  iter = 50000,
+  chains = 4,
+  cores = 4,
+  control = list(
+    adapt_delta = 0.999,
+    stepsize = 0.01,
+    max_treedepth = 15
+  )
+)
+```
+
+```{r, eval=FALSE, echo=FALSE}
+save(fit_robust_adjust, file = "fit_robust_adjust_week7_q2_cauchy_assignment.rda")
+```
+
+
+```{r, echo=FALSE}
+load("fit_robust_adjust_week7_q2_cauchy_assignment.rda")
+```
+
+However, many divergences still occurr: 
+```{r}
+plot(fit_robust_adjust)
+rstan::traceplot(fit_robust_adjust)
+pairs(fit_robust_adjust, pars = c("nu", "sigma", "beta0mu", "beta1mu"))
+```
+
+Adjusting prior for `zsigma` `zbeta0sigma`, and `zbeta0sigma` to `cauchy`:
+```{stan output.var="stanDsoRobustRegPanel_cauchy", eval=FALSE}
+data {
+    int<lower=1> Ntotal;
+    vector[Ntotal] y;
+    vector[Ntotal] x;
+    int<lower=1> Ngroups;
+    int<lower=1, upper=Ngroups> group[Ntotal];
+}
+transformed data {
+    real meanY;
+    real sdY;
+    vector[Ntotal] zy; // normalized y
+    real meanX;
+    real sdX;
+    vector[Ntotal] zx; // normalized x
+    meanY = mean(y);
+    sdY = sd(y);
+    zy = (y - meanY) / sdY;
+    meanX = mean(x);
+    sdX = sd(x);
+    zx = (x - meanX) / sdX;
+}
+parameters {
+    real<lower=0> zsigma;
+    real<lower=0> nu;
+    real zbeta0mu;
+    real zbeta1mu;
+    real<lower=0> zbeta0sigma;
+    real<lower=0> zbeta1sigma;
+    vector[Ngroups] zbeta0;
+    vector[Ngroups] zbeta1;
+}
+transformed parameters {
+    real<lower=0> sigma;
+    real beta0mu;
+    real beta1mu;
+    vector[Ngroups] beta0;
+    vector[Ngroups] beta1;
+    // Transform to original scale:
+    sigma = zsigma * sdY;
+    beta0mu = meanY + zbeta0mu * sdY  - zbeta1mu * meanX * sdY / sdX;
+    beta1mu = zbeta1mu * sdY / sdX;
+    beta0 = meanY + zbeta0 * sdY  - zbeta1 * meanX * sdY / sdX; // vectorized
+    beta1 = zbeta1 * sdY / sdX;                                 // vectorized
+}
+model {
+    zsigma ~ cauchy(0, 2);
+    nu ~ exponential(1/30.0);
+    zbeta0mu ~ normal(0, 10.0^2);
+    zbeta1mu ~ normal(0, 10.0^2);
+    zbeta0sigma ~ cauchy(0, 2);
+    zbeta1sigma ~ cauchy(0, 2);
+    zbeta0 ~ normal(zbeta0mu, zbeta0sigma);  // vectorized
+    zbeta1 ~ normal(zbeta1mu, zbeta1sigma);  // vectorized
+    for (i in 1:Ntotal) {
+        zy[i] ~ student_t(1+nu, zbeta0[group[i]] + zbeta1[group[i]] * x[i], zsigma);
+    }
+}
+
+```
+
+Additionally, decreasing `stepsize` and increasing `warmup`, `iter`, `adapt_delta`, and `max_treedepth`:
+```{r, eval=FALSE}
+fit_robust_cauchy <- sampling(
+  stanDsoRobustRegPanel_cauchy,
+  data = dataList,
+  pars = c(
+    "nu",
+    "sigma",
+    "beta0mu",
+    "beta1mu",
+    "beta0",
+    "beta1",
+    "zbeta0sigma",
+    "zbeta1sigma"
+  ),
+  iter = 5000,
+  chains = 4,
+  cores = 4,
+  warmup = 1500,
+  thin = 5,
+  control = list(
+    adapt_delta = 0.999999999,
+    stepsize = 0.0001,
+    max_treedepth = 20
+  )
+)
+```
+
+```{r, eval=FALSE, echo=FALSE}
+save(fit_robust_cauchy, file = "fit_robust_cauchy_week7_q2_assignment.rda")
+```
+
+```{r, echo=FALSE}
+load("fit_robust_cauchy_week7_q2_assignment.rda")
+```
+
+```{r}
+pairs(fit_robust_cauchy, pars = c("nu", "sigma", "beta0mu", "beta1mu"))
+```
+
+There is an auto-correlation problem with the $\beta0\mu$ and $\beta1\mu$
+```{r}
+stan_ac(fit_robust_cauchy, pars = c("nu", "sigma", "beta0mu", "beta1mu"))
+```
+
+By adjusting priors to `cauchy` and increasing several parameters, we were able to dramatically reduce the divergences from ~1800 to 3. However, the drawback to this approach (compared to parameterizing the model better based on understanding of the data) is speed. The model takes much longer to fit with a small step size. And while increasing the warmup ameliorates the auto-correlation, it does not fix it completely.
+
+# Using `life_exp` as response fit Gaussian and robust non-hierarchical regression models using Bayesian approach
+## Data
+
+`state.x77` from datasets used in multiple regression example in Statistical Analysis (MScA 31007):
+```{r}
+dta <- as.data.frame(state.x77) %>% 
+  janitor::clean_names()
+```
+
+```{r echo=FALSE}
+kable(dta %>% head(), caption = "`stat.x77`")
+```
+
+```{r}
+data_list <- list(
+  Ntotal = nrow(dta),
+  life_exp = dta$life_exp
+)
+```
+
+## Models
+
+Fitting intercept only models. First normal, then robust.
+
+### Normal
+```{stan output.var="stan_normal_model"}
+data {
+    int<lower=0> Ntotal;
+    vector<lower=0>[Ntotal] life_exp;
+}
+transformed data {
+    real mean_life_exp;
+    real sd_life_exp;
+    real unifLo;
+    real unifHi;
+    mean_life_exp = mean(life_exp);
+    sd_life_exp = sd(life_exp);
+    unifLo = sd_life_exp / 1000;
+    unifHi = sd_life_exp * 1000;
+}
+parameters {
+	real beta0;
+	real <lower=0> sigma;
+}
+model {
+  sigma ~ uniform(unifLo, unifHi);
+  life_exp ~ normal(beta0, sigma);
+}
+```
+
+```{r}
+fit_normal_life_exp <- sampling(
+  stan_normal_model,
+  data = data_list,
+  pars = c(
+    "beta0",
+    "sigma"
+  ),
+  iter = 5000,
+  chains = 4,
+  cores = 4,
+)
+```
+
+Model estimates mean of `life_exp`:
+```{r}
+show(fit_normal_life_exp)
+```
+
+Data mean: `r mean(dta$life_exp)`
+
+All model diagnostics looks good:
+```{r}
+pairs(fit_normal_life_exp, pars = c("beta0", "sigma"))
+stan_trace(fit_normal_life_exp, pars = c("beta0", "sigma"))
+stan_ac(fit_normal_life_exp, pars = c("beta0", "sigma"))
+stan_dens(fit_normal_life_exp, pars = c("beta0", "sigma"))
+stan_diag(fit_normal_life_exp)
+```
+
+### Robust
+```{stan output.var="stan_robust_model"}
+data {
+    int<lower=1> Ntotal;
+    vector<lower=0>[Ntotal] life_exp;
+}
+transformed data {
+    real expLambda;
+    real mean_life_exp;
+    real sd_life_exp;
+    real unifLo;
+    real unifHi;
+    expLambda = 1 / 30.0;
+    mean_life_exp = mean(life_exp);
+    sd_life_exp = sd(life_exp);
+    unifLo = sd_life_exp / 1000;
+    unifHi = sd_life_exp * 1000;
+}
+parameters {
+    real<lower=0> nu; 
+    real beta0;
+    real<lower=0> sigma;
+}
+model {
+  nu ~ exponential(expLambda);
+  sigma ~ uniform(unifLo, unifHi);
+  life_exp ~ student_t(nu, beta0, sigma);
+}
+```
+
+```{r}
+fit_robust_life_exp <- sampling(
+  stan_robust_model,
+  data = data_list,
+  pars = c(
+    "beta0",
+    "sigma",
+    "nu"
+  ),
+  iter = 5000,
+  chains = 4,
+  cores = 4,
+)
+```
+
+$\nu$ is high, so probably Gaussian.
+```{r}
+show(fit_robust_life_exp)
+plot(fit_robust_life_exp)
+```
+
+Slight memory in $\sigma$ and $\beta$:
+```{r}
+pairs(fit_robust_life_exp, pars = c("beta0", "sigma", "nu"))
+stan_trace(fit_robust_life_exp, pars = c("beta0", "sigma", "nu"))
+stan_ac(fit_robust_life_exp, pars = c("beta0", "sigma", "nu"))
+stan_dens(fit_robust_life_exp, pars = c("beta0", "sigma", "nu"))
+stan_diag(fit_robust_life_exp)
+```
+
+### Trying with predictor `hs_grad`
+
+```{r}
+model_df <- dta %>% select(hs_grad)
+data_list <- list(
+  Ntotal = nrow(dta),
+  Nx = ncol(model_df),
+  x = as.matrix(model_df),
+  life_exp = dta$life_exp
+)
+```
+
+```{stan output.var="stan_normal_predictors"}
+data {
+    int<lower=1> Ntotal;
+    int<lower=1> Nx;
+    vector[Ntotal] life_exp;
+    matrix[Ntotal, Nx] x;
+}
+transformed data {
+    real expLambda;
+    real mean_life_exp;
+    real sd_life_exp;
+    real unifLo;
+    real unifHi;
+    mean_life_exp = mean(life_exp);
+    sd_life_exp = sd(life_exp);
+    unifLo = sd_life_exp / 1000;
+    unifHi = sd_life_exp * 1000;
+}
+parameters {
+    real beta0;
+    vector[Nx] xbeta;
+    real<lower=0> sigma;
+}
+model {
+  sigma ~ uniform(unifLo, unifHi);
+  life_exp ~ normal(beta0 + x * xbeta, sigma);
+}
+```
+
+```{r}
+fit_normal_life_exp_predictors <- sampling(
+  stan_normal_predictors,
+  data = data_list,
+  pars = c(
+    "beta0",
+    "xbeta",
+    "sigma"
+  ),
+  iter = 5000,
+  chains = 4,
+  cores = 4,
+)
+```
+
+Initial takeaways from first model:
+
+* `beta0` is now 65.75 (down from the mean of 70.88), so average `life_exp` is 65.75 when there are no high school grads
+
+* However, `hs_grad` is significant and increases `life_expectancy` for every one unit change in `hs_grad`
+
+```{r}
+show(fit_normal_life_exp_predictors)
+plot(fit_normal_life_exp_predictors, pars = "xbeta")
+```
+
+* There is memory in $\sigma$ and betas
+
+* `beta0` and `beta1` show a strong negative relationship
+
+```{r}
+pairs(fit_normal_life_exp_predictors, pars = c("beta0", "xbeta", "sigma"))
+stan_trace(fit_normal_life_exp_predictors, pars = c("beta0", "xbeta", "sigma"))
+stan_ac(fit_normal_life_exp_predictors, pars = c("beta0", "xbeta", "sigma"))
+stan_dens(fit_normal_life_exp_predictors, pars = c("beta0", "xbeta", "sigma"))
+stan_diag(fit_normal_life_exp_predictors)
+```
+
+## Takeaways
+
+* Question 1 data was proven distinct between classes based on logistic and k-means; there were clear distinctions between groups with both methods 
+
+* Question 2 was unsolvable; however, we were able to significantly reduce divergences at the cost of painfully slower computation
+
+* No issues with any model diagnostics for all models in question 3
+
+* Intercept models simply estimated the mean from the data (no surprise)
+
+* Robust model was unnecessary due to high $\nu$, so Gaussian will likely be fine
+
+* `hs_grad` showed to be significant with a positive loading when viewing HDI
+>>>>>>> 19422b4d6656c480a25558b9333f444645d2a789

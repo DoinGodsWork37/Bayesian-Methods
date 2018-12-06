@@ -1,0 +1,656 @@
+---
+title: "Workshop 7.2"
+author: "Joshua Goldberg"
+date: "`r format(Sys.time(), '%B, %d %Y')`"
+always_allow_html: yes
+output:
+  github_document: 
+  pdf_document: default
+editor_options: 
+  chunk_output_type: inline
+---
+
+```{r Global-options, include=FALSE}
+knitr::opts_chunk$set(fig.width=6, fig.asp=.68, fig.path='Figs/',
+                      warning=FALSE, message=FALSE, cache=TRUE)
+```
+
+```{r Preamble, echo=FALSE}
+# Enter package in p_load()
+# If package is not installed, p_load() will install and load the package
+if(!"pacman" %in% rownames(installed.packages())) {
+  install.packages("pacman")
+  }
+pacman::p_load(tidyverse, ggthemes, here)
+
+# Set default ggplot theme to tufte
+theme_set(ggthemes::theme_tufte())
+```
+
+```{r Copy-files, echo=FALSE, eval=FALSE}
+# Enter files to load to project directory in from = "~/Downloads/your_file_name_here"
+file.copy(from = "~/Downloads/documents-MScA Bayesian Methods (32014)-MScA 32014 Lecture 8-HtWtData300.csv", to = here::here(), 
+          overwrite = TRUE, recursive = FALSE, 
+          copy.mode = TRUE)
+```
+
+# 1 References
+[G] Andrew Gelman, John B. Carlin, Hal S. Stern, David B. Dunson, Aki Vehtari, Donald B. Rubin, Bayesian Data Analysis, Third Edition, 2013, Taylor & Francis Group.
+[K] John K. Kruschke, Doing Bayesian Data Analysis, A Tutorial with R, JAGS, and STAN, 2015, Elsevier.
+
+# 2 Data
+In this example weight of a person in pounds is predicted by height in inches. Trying to predict weight by height of a person.
+
+For calculation of HDI source the utilities file from [K].
+```{r}
+source("./DBDA2Eprograms/DBDA2E-utilities.R")
+```
+
+# 3 Simple regression model
+The case in this section is a familiar model of the type
+$$y=\beta\theta+\beta1x+\epsilon$$
+
+## 3.1 MCMC in JAGS
+Read the data, create the data list.
+```{r}
+myData = read.csv("DBDA2Eprograms/HtWtData300.csv")
+y <- myData$weight
+x = myData$height
+dataList = list(x = x, y = y)
+```
+
+Describe the model.
+
+* If we suspect correlation between parameters, we normalize the parameters (normalizing does not always work; it never hurts)
+
+* Correlated parameters creates long narrow MCMC chain
+
+* `zsigma` uniform with wide range; not using any MLE
+
+* $\nu$ exponential distribution
+
+* Trying to calculate coefficients from the z-score data for the non-standardized data
+
+```{r}
+ modelString = "
+# Standardize the data:
+data {
+    Ntotal <- length(y)
+    xm <- mean(x)
+    ym <- mean(y)
+    xsd <- sd(x)
+    ysd <- sd(y)
+    for ( i in 1:length(y) ) {
+      zx[i] <- ( x[i] - xm ) / xsd
+      zy[i] <- ( y[i] - ym ) / ysd
+    }
+}
+# Specify the model for standardized data:
+model {
+    for ( i in 1:Ntotal ) {
+      zy[i] ~ dt( zbeta0 + zbeta1 * zx[i] , 1/zsigma^2 , nu )
+    }
+    # Priors vague on standardized scale:
+    zbeta0 ~ dnorm( 0 , 1/(10)^2 )  
+    zbeta1 ~ dnorm( 0 , 1/(10)^2 )
+    zsigma ~ dunif( 1.0E-3 , 1.0E+3 )
+    nu ~ dexp(1/30.0)
+    # Transform to original scale:
+    beta1 <- zbeta1 * ysd / xsd  
+    beta0 <- zbeta0 * ysd  + ym - zbeta1 * xm * ysd / xsd 
+    sigma <- zsigma * ysd
+}
+"
+# Write out modelString to a text file
+writeLines(modelString , con = "TEMPmodel.txt")
+```
+
+Every arrow has a corresponding line in the description.
+It is also possible putting description of data as
+```{r, eval=FALSE}
+for (i in 1:Ntotal) {
+  zy[i] ~ dt(mu[i] , 1 / zsigma ^ 2 , nu)
+  mu[i] <- zbeta0 + zbeta1 * zx[i]
+}
+```
+
+That would allow recording mu[i] in MCMC.
+
+Variable names starting with “z” mean that these variables are standardized (z-scores).
+The intention of using z-scores in JAGS is to overcome a problem of correlation of the parameters (see correlation between beta0 and beta1 below).
+Strong correlation creates thin and long shape on scatter-plot of the variables which makes Gibbs sampling very slow and inefficient.
+HMC implemented in Stan does not have this problem.
+
+```{r}
+parameters = c("beta0" ,  "beta1" ,  "sigma",
+               "zbeta0" , "zbeta1" , "zsigma", "nu")
+adaptSteps = 500  # Number of steps to "tune" the samplers
+burnInSteps = 1000
+nChains = 4
+thinSteps = 1
+numSavedSteps = 20000
+nIter = ceiling((numSavedSteps * thinSteps) / nChains)
+jagsModel = jags.model(
+  "TEMPmodel.txt" ,
+  data = dataList ,
+  #inits=initsList ,
+  n.chains = nChains ,
+  n.adapt = adaptSteps
+)
+```
+
+```{r}
+update(jagsModel , n.iter = burnInSteps)
+codaSamples = coda.samples(
+  jagsModel ,
+  variable.names = parameters ,
+  n.iter = nIter ,
+  thin = thinSteps
+)
+```
+
+Explore the MCMC object. $\nu$ lower than 30 then robust was necessary.
+```{r}
+summary(codaSamples)
+```
+
+```{r}
+#plot(codaSamples) Too many graphs
+#autocorr.plot(codaSamples,ask=F)
+effectiveSize(codaSamples)
+```
+
+HDIs for $\sigma$ are pretty narrow. For the mean value, they are larger.
+```{r}
+#gelman.diag(codaSamples)
+#gelman.plot(codaSamples)   These lines return error. Most likely reason: collinearity of parameters 
+(HDIofChains <-
+   lapply(codaSamples, function(z)
+     cbind(
+       Mu = HDIofMCMC(codaSamples[[1]][, 1]), Sd = HDIofMCMC(codaSamples[[1]][, 2])
+     )))
+```
+
+Look at strong correlation between beta0 and beta1 which slows Gibbs sampling down.
+```{r}
+head(as.matrix(codaSamples[[1]]))
+```
+
+Why is there correlation between $\beta0$ and $\beta1$? Because $\epsilon$ is small (thin cloud)
+
+Divergences 
+```{r}
+pairs(as.matrix(codaSamples[[1]])[, 1:4])
+```
+
+## 3.2 MCMC in Stan
+Describe the model in **Stan**.
+
+In order to give a vague priors to slope and intercept consider the following arguments:
+
+The largest possible value of slope is
+$$\sigma_y\sigma_x$$
+when variables $x$ and $y$ are perfectly correlated.
+Then standard deviation of the slope parameter $\beta1$ should be large enough to make the maximum value easily achievable.
+Size of intercept is defined by value of $E[X]\sigma_y\sigma_x$. So, the prior should have enough width to include this value.
+
+Did not normalize data, but it would not hurt.
+```{r}
+modelString = "
+data {
+    int<lower=1> Ntotal;
+    real x[Ntotal];
+    real y[Ntotal];
+    real meanY;
+    real sdY;
+    real meanX;
+    real sdX;
+}
+transformed data {
+    real unifLo;
+    real unifHi;
+    real expLambda;
+    real beta0sigma;
+    real beta1sigma;
+    unifLo = sdY/1000;
+    unifHi = sdY*1000;
+    expLambda = 1/30.0;
+    beta1sigma = 10*fabs(sdY/sdX);
+    beta0sigma = 10*(sdY^2+sdX^2)    / 10*fabs(meanX*sdY/sdX);
+}
+parameters {
+    real beta0;
+    real beta1;
+    real<lower=0> nu; 
+    real<lower=0> sigma; 
+}
+model {
+    sigma ~ uniform(unifLo, unifHi); 
+    nu ~ exponential(expLambda);
+    beta0 ~ normal(0, beta0sigma);
+    beta1 ~ normal(0, beta1sigma);
+    for (i in 1:Ntotal) {
+        y[i] ~ student_t(nu, beta0 + beta1 * x[i], sigma);
+    }
+}
+"
+```
+
+```{r}
+stanDsoRobustReg <- stan_model(model_code = modelString) 
+```
+
+```{r}
+d <- myData
+dat <- list(
+  Ntotal = length(d$weight),
+  y = d$weight,
+  meanY = mean(d$weight),
+  sdY = sd(d$weight),
+  x = d$height,
+  meanX = mean(d$height),
+  sdX = sd(d$height)
+)
+```
+
+```{r}
+# 17_1: robust model to predict metric variable using metric predictor
+# using Height-Weight data from Kruschke
+# fit model
+fitSimRegStan <- sampling(
+  stanDsoRobustReg,
+  data = dat,
+  pars = c('beta0', 'beta1', 'nu', 'sigma'),
+  iter = 5000,
+  chains = 4,
+  cores = 4
+)
+```
+
+```{r}
+print(fitSimRegStan)
+```
+
+```{r}
+plot(fitSimRegStan)
+rstan::traceplot(fitSimRegStan, ncol = 1, inc_warmup = F)
+```
+
+Still correlation between $\beta0, \beta1$ 
+```{r}
+pairs(fitSimRegStan, pars=c('nu','beta0','beta1','sigma'))
+```
+
+```{r}
+stan_dens(fitSimRegStan)
+```
+
+```{r}
+stan_ac(fitSimRegStan, separate_chains = T)
+```
+
+```{r}
+stan_diag(fitSimRegStan, information = "sample", chain = 0)
+```
+
+```{r}
+stan_diag(fitSimRegStan, information = "stepsize", chain = 0)
+```
+
+# 4 Using fitted regression model for prediction
+Recall that the data in this example contains predictor height and output weight for a group of people from HtWtData300.csv.
+
+Plot all heights observed in the sample and check the summary of the variable.
+
+Take the chains of $\beta0, \beta1$ and have distribution of predictions; chains will provide results in the same state
+```{r}
+plot(1:length(dat$x), dat$x)
+```
+
+```{r}
+summary(dat$x)
+```
+
+Can we predict weight of a person who is 50 or 80 inches tall?
+
+To do this we can go through all pairs of simulated parameters $(\beta0, \beta1)$ and use them to simulate $y(50)$ and $y(80)$.
+
+This gives distribution of predicted values.
+```{r}
+summary(fitSimRegStan)
+```
+
+```{r}
+regParam <-
+  cbind(
+    Beta0 = rstan::extract(fitSimRegStan, pars = "beta0")$'beta0',
+    Beta1 = rstan::extract(fitSimRegStan, pars = "beta1")$'beta1'
+  )
+head(regParam)
+```
+
+```{r}
+predX50 <- apply(regParam, 1, function(z)
+  z %*% c(1, 50))
+predX80 <- apply(regParam, 1, function(z)
+  z %*% c(1, 80))
+```
+
+Plot both distributions, look at their summaries and HDIs.
+```{r}
+suppressWarnings(library(HDInterval))
+den <- density(predX50)
+plot(density(predX80), xlim = c(60, 240))
+lines(den$x, den$y)
+```
+
+```{r}
+summary(cbind(predX50, predX80))
+```
+
+```{r}
+rbind(predX50 = hdi(predX50), predX80 = hdi(predX80))
+```
+
+If you want to see the distribution of the prediction of parameter and interrupt sample as population; parameters as poopulation; each individual has it's own parameters for $\beta0,\beta1$
+
+# 5 Hierarchical regression on individuals within groups
+## 5.1 Simulated data from the book
+
+### 5.1.1 Data
+Read the data.
+```{r}
+df = read.csv(
+  "documents-MScA Bayesian Methods (32014)-MScA 32014 Lecture 8-HierLinRegressData.csv")
+head(df)
+unique(df$Subj)
+summary(df)
+str(df)
+dataList <- list(
+  Ntotal = length(df$Y),
+  y = df$Y,
+  x = df$X,
+  Ngroups = max(df$Subj),
+  group = df$Subj
+)
+```
+
+### 5.1.2 Model description
+Description of the model is in the file "ch17_2.stan":
+```{r}
+modelStringPanel = "
+data {
+    int<lower=1> Ntotal;
+    vector[Ntotal] y;
+    vector[Ntotal] x;
+    int<lower=1> Ngroups;
+    int<lower=1, upper=Ngroups> group[Ntotal];
+}
+transformed data {
+    real meanY;
+    real sdY;
+    vector[Ntotal] zy; // normalized y
+    real meanX;
+    real sdX;
+    vector[Ntotal] zx; // normalized x
+    meanY = mean(y);
+    sdY = sd(y);
+    zy = (y - meanY) / sdY;
+    meanX = mean(x);
+    sdX = sd(x);
+    zx = (x - meanX) / sdX;
+}
+parameters {
+    real<lower=0> zsigma;
+    real<lower=0> nu;
+    real zbeta0mu;
+    real zbeta1mu;
+    real<lower=0> zbeta0sigma;
+    real<lower=0> zbeta1sigma;
+    vector[Ngroups] zbeta0;
+    vector[Ngroups] zbeta1;
+}
+transformed parameters {
+    real<lower=0> sigma;
+    real beta0mu;
+    real beta1mu;
+    vector[Ngroups] beta0;
+    vector[Ngroups] beta1;
+    // Transform to original scale:
+    sigma = zsigma * sdY;
+    beta0mu = meanY + zbeta0mu * sdY  - zbeta1mu * meanX * sdY / sdX;
+    beta1mu = zbeta1mu * sdY / sdX;
+    beta0 = meanY + zbeta0 * sdY  - zbeta1 * meanX * sdY / sdX; // vectorized
+    beta1 = zbeta1 * sdY / sdX;                                 // vectorized
+}
+model {
+    zsigma ~ uniform(0.001, 1000);
+    nu ~ exponential(1/30.0);
+    zbeta0mu ~ normal(0, 10.0^2);
+    zbeta1mu ~ normal(0, 10.0^2);
+    zbeta0sigma ~ uniform(0.001, 1000);
+    zbeta1sigma ~ uniform(0.001, 1000);
+    zbeta0 ~ normal(zbeta0mu, zbeta0sigma);  // vectorized
+    zbeta1 ~ normal(zbeta1mu, zbeta1sigma);  // vectorized
+    for (i in 1:Ntotal) {
+        zy[i] ~ student_t(1+nu, zbeta0[group[i]] + zbeta1[group[i]] * x[i], zsigma);
+    }
+}"
+```
+
+5.1.3 First run: default parameters
+Prepare the model and run MCMC.
+```{r}
+# 17_2: robust model to predict grouped metric variable using metric predictor
+
+# prepare DSO model
+# 2 alternative ways: from file or from created string.
+#stanDsoRobustRegPanel <- stan_model(file=paste(dataPath,
+#                                               "BayesStanExamples/ch17/ch17_2.stan",sep="/"));
+stanDsoRobustRegPanel <- stan_model(model_code = modelStringPanel) 
+```
+
+```{r}
+fit <- sampling (
+  stanDsoRobustRegPanel,
+  data = dataList,
+  pars = c(
+    'nu',
+    'sigma',
+    'beta0mu',
+    'beta1mu',
+    'beta0',
+    'beta1',
+    'zbeta0sigma',
+    'zbeta1sigma'
+  ),
+  iter = 5000,
+  chains = 4,
+  cores = 4
+)
+```
+
+Cannot trust this model due to divergence issues.
+
+Explore the shinystan object.
+```{r eval=FALSE}
+library(shinystan)
+launch_shinystan(fit)
+```
+
+### 5.1.4 Trying to improve convergence by altering step size
+Here is a useful blog post addressing similar issue.
+It recommends setting parameters controlling step size to shorten steps:
+
+* If there is problem with convergence, increase the delta and reduce step size
+
+```{r}
+fit <- sampling (
+  model,
+  data = dataList,
+  pars = c(
+    'nu',
+    'sigma',
+    'beta0mu',
+    'beta1mu',
+    'beta0',
+    'beta1',
+    'zbeta0sigma',
+    'zbeta1sigma'
+  ),
+  iter = 50000,
+  chains = 4,
+  cores = 4,
+  control = list(
+    adapt_delta = 0.999,
+    stepsize = 0.01,
+    max_treedepth = 15
+  )
+)
+```
+
+* Divergences may occurr above or below the median of the distribution; (pairs plot)
+
+* In this case they all happened on the lower side of the distribution
+
+* Yellow dots tell you suggested tree depth is too high (max is 11 for `max_treedepth`)
+
+* Distribributions are not very smooth also
+
+```{r}
+knitr::include_graphics("~/Desktop/screen_shots/Screen Shot 2018-11-05 at 8.18.30 PM.jpg")
+```
+
+```{r}
+knitr::include_graphics("~/Desktop/screen_shots/Screen Shot 2018-11-05 at 8.21.42 PM.jpg")
+```
+
+## 5.2 Example from Linear and Nonlinear Models
+Example from Linear and Nonlinear Models (31010), lecture 9 considers results of Panel Study of Income Dynamics (PSID) that started in 1968.
+
+Example data psid show income per individual collected over number of years.
+The data are in package **faraway**.
+
+* We need heiarchical when we want to know what's going on at different levels of the model
+
+* `y` will be measurement of household income in years
+
+* Interested in each individual slope, but also population 
+
+```{r}
+suppressMessages(library(faraway))
+suppressMessages(library(lattice))
+```
+
+```{r}
+data(psid)
+head(psid)
+```
+
+Estimate slopes of log-incomes relative to time.
+Time interval is centered at 1978.
+```{r}
+slopes <- numeric(85)
+intercepts <- numeric(85)
+for (i in 1:85) {
+  lmod <- lm(log(income) ~ I(year - 78), subset = (person == i), psid)
+  intercepts[i] <- coef(lmod)[1]
+  slopes[i] <- coef(lmod)[2]
+}
+head(cbind(slopes, intercepts))
+```
+
+Compare intercepts and slopes for males and females.
+```{r}
+plot(intercepts, slopes, xlab = "Intercept", ylab = "Slope")
+```
+
+```{r}
+psex <- psid$sex[match(1:85, psid$person)]
+boxplot(split(slopes, psex))
+```
+
+Compare slopes for males and females.
+```{r}
+t.test(slopes[psex == "M"], slopes[psex == "F"])
+```
+
+Also compare incomes at the intercept. Starting level was very different:
+```{r}
+t.test(intercepts[psex == "M"], intercepts[psex == "F"])
+```
+
+Both gender differences appear to be significant at 5% level.
+For slopes advantage of females is not as unquestionable as advantage of males in intercepts.
+
+Create subsets per gender group and analyze posterior distributions for slopes and intercepts.
+```{r}
+dfM <- subset(psid, sex == "M")[, c("year", "income", "person")]
+dfF <- subset(psid, sex == "F")[, c("year", "income", "person")]
+oldPersons <- unique(dfM$person)
+newPersons <- match(dfM$person, oldPersons)
+dfM$person <- newPersons
+
+dataListM <- list(
+  Ntotal = length(dfM$income),
+  y = log(dfM$income),
+  x = dfM$year - 78,
+  Ngroups = length(unique(dfM$person)),
+  group = dfM$person
+)
+
+oldPersons <- unique(dfF$person)
+newPersons <- match(dfF$person, oldPersons)
+dfF$person <- newPersons
+dataListF <- list(
+  Ntotal = length(dfF$income),
+  y = log(dfF$income),
+  x = dfF$year - 78,
+  Ngroups = length(unique(dfF$person)),
+  group = dfF$person
+)
+```
+
+Create model description for fitting panel data seprately for females and males.
+Analyze differences in slopes and intercepts for individuals an for groups of two genders.
+
+Run both models `fitF` and `fitMseparately`.
+
+Compare Bayes and LM.
+
+* In the case of Bayes we got robusut: t-distribution (it's accounting for more of the outlier points)
+
+* Advantage of having robust model: parameters are not jumping as much
+
+* Slopes are much more consistent with robust model.
+
+* We get information out of the individuals
+
+* But also level above: $\beta0\mu,\beta1\mu$
+```{r}
+par(mfrow = c(1, 2))
+knitr::include_graphics("~/Desktop/screen_shots/Screen Shot 2018-11-05 at 8.36.58 PM.jpg")
+knitr::include_graphics("~/Desktop/screen_shots/Screen Shot 2018-11-05 at 8.37.15 PM.jpg")
+```
+
+If we want to estimate population slope, we should probably allow shrinkage more (not interested in just comparing individuals) 
+* We need to make prior of $\beta1$ a t-distribution (makes center narrower), but it will still have room in tails
+  
+  - If some parameter does not want to converge, it can happen (if you replace mediaum level normal with t-distribution, that will allow better shrinkage); and you will not have to do it manually
+  
+* Could force by hand by picking priors or change to by changing distribution
+  
+```{r}
+knitr::include_graphics("~/Desktop/screen_shots/Image 3.jpeg")
+```
+
+
+
+
+
+
+
+
+
+
+

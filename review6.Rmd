@@ -52,13 +52,6 @@ h_clean <- heights_data %>% na.omit() %>% filter(earn != 0)
 ```
 
 ```{r}
-# normal prior on beta is similar to ridge regression
-# laplace prior gives lasso 
-
-writeLines(readLines("model_h_stan.text"))
-```
-
-```{r}
 N <- nrow(h_clean)
 earn <- h_clean$earn
 height <- h_clean$height
@@ -71,15 +64,81 @@ map(data, ~ head(.x))
 ```
 
 ```{r}
-fit <- stan(file = "review_session_model1.stan", data = data, seed = 1)
+fit <- stan(file = "review6_session_model1.stan", data = data, seed = 1)
 ```
 
+```{r}
+show(fit)
+plot(fit)
+```
 
+```{r}
+stan_dens(fit)
+```
 
+```{r}
+fit_mean_c <- stan(file = "review6_session_model2.stan", data = data, seed = 1)
+```
 
+```{r}
+plot(fit_mean_c)
+```
 
+```{r}
+stan_dens(fit_mean_c)
+show(fit_mean_c)
+```
 
+```{r}
+fit_mean_c_priors <- stan(file = "review6_session_model3.stan", data = data, seed = 1)
+```
 
+```{r}
+stan_dens(fit_mean_c_priors)
+show(fit_mean_c_priors)
+```
+
+```{r}
+N <- nrow(h_clean)
+earn <- h_clean$earn
+height <- h_clean$height
+male <- h_clean$sex == 1
+
+stan_rdump(c("N", "earn", "height", "male"), file = "heights.data.R")
+data <- read_rdump("heights.data.R")
+map(data, ~ head(.x))
+```
+
+```{r}
+fit_mean_c_priors_male <- stan(file = "review6_session_model4.stan", data = data, seed = 1)
+```
+
+```{r}
+stan_dens(fit_mean_c_priors_male)
+show(fit_mean_c_priors_male)
+```
+
+If the output the loo object is position, `elpd_diff`, then the first model is better.
+```{r}
+library(loo)
+log_lik_1 <- extract_log_lik(fit_mean_c_priors, "lp__", merge_chain = FALSE)
+loo_1 <- loo(log_lik_1)
+
+log_lik_2 <- extract_log_lik(fit_mean_c_priors_male, "lp__", merge_chain = FALSE)
+loo_2 <- loo(log_lik_2)
+
+compare(loo_1, loo_2)
+```
+
+```{r}
+fit_mean_c_priors_male_interact <- stan(file = "review6_session_model5.stan", data = data, seed = 1)
+```
+
+```{r}
+plot(fit_mean_c_priors_male_interact)
+stan_dens(fit_mean_c_priors_male_interact)
+show(fit_mean_c_priors_male_interact)
+```
 
 
 

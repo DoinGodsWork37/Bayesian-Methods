@@ -1,0 +1,552 @@
+---
+title: "Week 9: Assignment Multiple Regression and Variable Selection"
+author: "Joshua Goldberg"
+date: "`r format(Sys.time(), '%B, %d %Y')`"
+always_allow_html: yes
+output:
+  html_document:
+    theme: united
+    df_print: paged
+    highlight: textmate
+    code_folding: show
+    toc: true
+    toc_float: true
+  github_document:
+editor_options: 
+  chunk_output_type: inline
+---
+
+```{r Global-options, include=FALSE}
+knitr::opts_chunk$set(fig.width=6, fig.asp=0.618, fig.path='Figs/',
+                      warning=FALSE, message=FALSE)
+```
+
+```{r Preamble, echo=FALSE}
+# Enter package in p_load()
+# If package is not installed, p_load() will install and load the package
+if(!"pacman" %in% rownames(installed.packages())) {
+  install.packages("pacman")
+  }
+pacman::p_load(tidyverse, ggthemes, here, rstan, HDInterval, runjags)
+
+# Parallel Stan
+rstan_options(auto_write = TRUE)
+options(mc.cores = parallel::detectCores())
+
+# Set default ggplot theme to tufte
+theme_set(ggthemes::theme_tufte())
+```
+
+```{r Copy-files, echo=FALSE, eval=FALSE}
+# Enter files to load to project directory in from = "~/Downloads/your_file_name_here"
+file.copy(from = "~/Downloads/", to = here::here(), 
+          overwrite = TRUE, recursive = FALSE, 
+          copy.mode = TRUE)
+```
+
+# 1 Data
+Consider data from example used in Statistical Analysis and Machine Learning and Predictive Analytics.
+Compare results with workshop.
+```{r}
+myData <- swiss
+```
+
+# 2 Questions
+
+## Data list
+```{r}
+x <- myData %>% select(-Fertility)
+data_list <- list(
+  Ntotal = nrow(x),
+  Nx = ncol(x),
+  x = as.matrix(x),
+  y = myData$Fertility
+)
+```
+
+## 2.1 Fit robust linear regression for response `Fertility` using all available predictors without shrinkage
+
+```{stan output.var="model_robust_all_preds", eval=FALSE}
+data {
+    int<lower=1> Ntotal;
+    int<lower=1> Nx;
+    vector[Ntotal] y;
+    matrix[Ntotal, Nx] x;
+}
+transformed data {
+    real expLambda;
+    real mean_y;
+    real sd_y;
+    real unifLo;
+    real unifHi;
+    expLambda = 1 / 30.0;
+    mean_y = mean(y);
+    sd_y = sd(y);
+    unifLo = sd_y / 1000;
+    unifHi = sd_y * 1000;
+}
+parameters {
+    real<lower=0> nu;
+    real beta0;
+    vector[Nx] xbeta;
+    real<lower=0> sigma;
+}
+transformed parameters{
+    vector[Ntotal] y_hat;
+    y_hat = beta0 + x * xbeta;
+}
+model {
+  nu ~ exponential(expLambda);
+  sigma ~ uniform(unifLo, unifHi);
+  y ~ student_t(nu, y_hat, sigma);
+}
+```
+
+```{r eval=FALSE}
+fit_robust_all_preds <- sampling(
+  model_robust_all_preds,
+  data = data_list,
+  pars = c(
+    "beta0",
+    "xbeta",
+    "sigma",
+    "nu"
+  ),
+  iter = 2500,
+  chains = 4,
+  cores = 4,
+  control = list(
+    max_treedepth = 15
+  )
+)
+```
+
+```{r echo=FALSE}
+# save(fit_robust_all_preds, file = "fit_robust_all_preds.rda")
+load("fit_robust_all_preds.rda")
+```
+
+Probably not robust due to high $\nu$.
+```{r}
+plot(fit_robust_all_preds, pars = "nu")
+```
+
+### Analyze correlations between slope parameters and interpret them
+
+The most notable correlations:
+
+* $\beta_0$ and $\beta_5$ have a strong negative relationship 
+
+* $\beta_0$ and $\beta_1$ also have a noticably strong negative relationship
+
+* There are several others with correlations higher than zero, but none to be alarmed about (no narrow tunnel)
+
+```{r, fig.asp=.75}
+pairs(fit_robust_all_preds, pars = c("beta0", "xbeta","sigma", "nu"))
+```
+
+Traces look good and no auto-correlation issues:
+```{r}
+stan_trace(fit_robust_all_preds, pars = c("beta0", "xbeta","sigma", "nu"))
+stan_ac(fit_robust_all_preds, pars = c("beta0", "xbeta","sigma", "nu"))
+```
+
+We have smooth densities with no shrinkage:
+```{r}
+stan_dens(fit_robust_all_preds, pars = c("beta0", "xbeta","sigma", "nu"))
+```
+
+### Which slope parameters are not significant based on 95%-HDI? 
+$\beta_1,\beta_3,\beta_4,\beta_5$ are significant. Note that $\beta_1$ and $\beta_4$ is close to zero, but still significant based on 95% HDI.
+```{r}
+plot(fit_robust_all_preds, pars = "xbeta")
+```
+
+```{r}
+betas <- rstan::extract(fit_robust_all_preds, pars = c("beta0", "xbeta"))
+hdi(betas$beta0)
+hdi(betas$xbeta)
+```
+
+### Does the model satisfy Gaussian assumption?
+
+$\nu$ is high but the HDI is very wide (and includes below 10). Therefore, it is difficult to conclude that Gaussian assumption is satisfied given the uncertainty of $\nu$ 
+```{r}
+nu <- rstan::extract(fit_robust_all_preds, pars = "nu")
+hdi(nu)
+```
+
+## 2.2 Fit robust linear regression for response `Fertility` using all available predictors with shrinkage
+
+```{stan output.var="model_robust_all_preds_shrinkage", eval=FALSE}
+data {
+    int<lower=1> Ntotal;
+    int<lower=1> Nx;
+    vector[Ntotal] y;
+    matrix[Ntotal, Nx] x;
+}
+transformed data {
+    real expLambda;
+    real meanY;
+    real sdY;
+    real unifLo;
+    real unifHi;
+    vector[Ntotal] zy; // normalized
+    vector[Nx] meanX;
+    vector[Nx] sdX;
+    matrix[Ntotal, Nx] zx; // normalized
+    
+    expLambda = 1 / 30.0;
+    meanY = mean(y);
+    sdY = sd(y);
+    unifLo = sdY / 1000;
+    unifHi = sdY * 1000;
+    zy = (y - meanY) / sdY;
+    
+    for (j in 1:Nx) {
+        meanX[j] = mean(x[, j]);
+        sdX[j] = sd(x[, j]);
+        for (i in 1:Ntotal) {
+            zx[i, j] = (x[i, j] - meanX[j]) / sdX[j];
+        }
+    }
+}
+parameters {
+    real zbeta0;
+    real<lower=0> sigmaBeta;
+    vector[Nx] zbeta;
+    real<lower=0> nu;
+    real<lower=0> zsigma;
+}
+transformed parameters{
+    vector[Ntotal] zy_hat;
+    zy_hat = zbeta0 + zx * zbeta;
+}
+model {
+    zbeta0 ~ normal(0, 2);
+    sigmaBeta ~ gamma(2.3,1.3); // mode 0, sd 0.5 
+    // we want to allow sigma to be as small as necessary; we want it to be zero, 
+    // but let it deviate; when sigma close to zero, sigma is much stronger
+    zbeta  ~ student_t(expLambda, 0, sigmaBeta);
+    nu ~ exponential(expLambda);
+    zsigma ~ uniform(unifLo, unifHi);
+    zy ~ student_t(1 + nu, zy_hat, zsigma);
+}
+generated quantities { 
+    // Transform to original scale:
+    real beta0; 
+    vector[Nx] beta;
+    real sigma;
+    // .* and ./ are element-wise product and divide
+    beta0 = zbeta0 * sdY  + meanY - sdY * sum(zbeta .* meanX ./ sdX);
+    beta = sdY * (zbeta ./ sdX);
+    sigma = zsigma * sdY;
+}
+```
+
+```{r eval=FALSE}
+fit_robust_all_preds_shrinkage <- sampling(
+  model_robust_all_preds_shrinkage,
+  data = data_list,
+  pars = c(
+    "beta0",
+    "beta",
+    "sigma",
+    "nu"
+  ),
+  iter = 5000,
+  chains = 4,
+  cores = 4
+)
+```
+
+```{r echo=FALSE}
+# save(fit_robust_all_preds_shrinkage, file = "fit_robust_all_preds_shrinkage.rda")
+load("fit_robust_all_preds_shrinkage.rda")
+```
+
+Shrinkage is not strong:
+```{r}
+plot(fit_robust_all_preds_shrinkage, pars = "beta")
+stan_dens(fit_robust_all_preds, pars = c("beta0", "xbeta","sigma", "nu"))
+```
+
+### Modify parameters of prior distribution for $\sigma\beta$ from values in the workshop in order to make shrinkage stronger
+
+If we reduce the parameters of $\gamma$, the distribution moves closer to zero, which should influence $\sigma\beta$.
+
+```{r message=FALSE, warning=FALSE}
+data.frame(new_gamma = dgamma(seq(0, 1, .01), .8, 1.5),
+           original_gamma = dgamma(seq(0, 1, .01), 1.3, 2.3)) %>%
+  gather(key = "parameter", value = value) %>% 
+  ggplot(aes(value, fill = parameter)) +
+  geom_density(alpha = .75, color = "#d9d9d9") +
+  scale_fill_viridis_d(name = NULL, labels = c(expression(dgamma(.8, 1.5)), expression(dgamma(1.3, 2.3)))) +
+  labs(title = latex2exp::TeX("New $\\gamma$ Encourages Movement to Zero"),
+       x = NULL, y = "Density") +
+  theme(legend.position = "top")
+```
+
+```{stan output.var="model_robust_all_preds_shrinkage_more", eval=FALSE}
+data {
+    int<lower=1> Ntotal;
+    int<lower=1> Nx;
+    vector[Ntotal] y;
+    matrix[Ntotal, Nx] x;
+}
+transformed data {
+    real expLambda;
+    real meanY;
+    real sdY;
+    real unifLo;
+    real unifHi;
+    vector[Ntotal] zy; // normalized
+    vector[Nx] meanX;
+    vector[Nx] sdX;
+    matrix[Ntotal, Nx] zx; // normalized
+    
+    expLambda = 1 / 30.0;
+    meanY = mean(y);
+    sdY = sd(y);
+    unifLo = sdY / 1000;
+    unifHi = sdY * 1000;
+    zy = (y - meanY) / sdY;
+    
+    for (j in 1:Nx) {
+        meanX[j] = mean(x[, j]);
+        sdX[j] = sd(x[, j]);
+        for (i in 1:Ntotal) {
+            zx[i, j] = (x[i, j] - meanX[j]) / sdX[j];
+        }
+    }
+}
+parameters {
+    real zbeta0;
+    real<lower=0> sigmaBeta;
+    vector[Nx] zbeta;
+    real<lower=0> nu;
+    real<lower=0> zsigma;
+}
+transformed parameters{
+    vector[Ntotal] zy_hat;
+    zy_hat = zbeta0 + zx * zbeta;
+}
+model {
+    zbeta0 ~ normal(0, 2);
+    sigmaBeta ~ gamma(.8, 1.5); // mode 0, sd 0.5 
+    // we want to allow sigma to be as small as necessary; we want it to be zero, 
+    // but let it deviate; when sigma close to zero, sigma is much stronger
+    zbeta  ~ student_t(expLambda, 0, sigmaBeta);
+    nu ~ exponential(expLambda);
+    zsigma ~ uniform(unifLo, unifHi);
+    zy ~ student_t(1 + nu, zy_hat, zsigma);
+}
+generated quantities { 
+    // Transform to original scale:
+    real beta0; 
+    vector[Nx] beta;
+    real sigma;
+    // .* and ./ are element-wise product and divide
+    beta0 = zbeta0 * sdY  + meanY - sdY * sum(zbeta .* meanX ./ sdX);
+    beta = sdY * (zbeta ./ sdX);
+    sigma = zsigma * sdY;
+}
+```
+
+```{r eval=FALSE}
+fit_robust_all_preds_shrinkage_more <- sampling(
+  model_robust_all_preds_shrinkage_more,
+  data = data_list,
+  pars = c(
+    "beta0",
+    "beta",
+    "sigma",
+    "nu"
+  ),
+  iter = 5000,
+  chains = 4,
+  cores = 4,
+  warmup = 2500,
+  thin = 5,
+  control = list(
+    max_treedepth = 20,
+    adapt_delta = .93
+  )
+)
+```
+
+```{r echo=FALSE}
+# save(fit_robust_all_preds_shrinkage_more, file = "fit_robust_all_preds_shrinkage_more.rda")
+load("fit_robust_all_preds_shrinkage_more.rda")
+```
+
+### Which parameters shrunk to become insignificant in model with shrinkage?
+
+$\beta_1$ and $\beta_2$ had the most skrinkage. $\beta5$ became insignificant:
+
+```{r}
+stan_dens(fit_robust_all_preds_shrinkage_more, pars = c("beta0", "beta","sigma", "nu"))
+```
+
+* $\beta_1$, $\beta_2$, $\beta_4$, and $\beta_5$ HDI now include zero. 
+
+* $\beta_4$ and $\beta_5$ barely include zero.
+
+```{r}
+plot(fit_robust_all_preds_shrinkage_more, pars = "beta")
+hdi(rstan::extract(fit_robust_all_preds_shrinkage_more, pars = "beta"))
+hdi(rstan::extract(fit_robust_all_preds_shrinkage, pars = "beta"))
+hdi(rstan::extract(fit_robust_all_preds, pars = "xbeta"))
+```
+
+When introducting skrinkage, there was auto-correlation problems which were fixed by adjusting some parameters.
+```{r}
+stan_ac(fit_robust_all_preds_shrinkage_more)
+```
+
+## 2.3 Run model selection like in Workshop 2
+
+```{r eval=FALSE}
+modelString = "
+    # Standardize the data:
+    data {
+        ym <- mean(y)
+        ysd <- sd(y)
+        for ( i in 1:Ntotal ) {
+            zy[i] <- ( y[i] - ym ) / ysd
+        }
+        for ( j in 1:Nx ) {
+            xm[j]  <- mean(x[,j])
+            xsd[j] <-   sd(x[,j])
+            for ( i in 1:Ntotal ) {
+                zx[i,j] <- ( x[i,j] - xm[j] ) / xsd[j]
+            }
+        }
+    }
+    # Specify the model for standardized data:
+    model {
+        for ( i in 1:Ntotal ) {
+            zy[i] ~ dt( zbeta0 + sum( delta[1:Nx] * zbeta[1:Nx] * zx[i,1:Nx] ) ,  1/zsigma^2 , nu )
+        }
+        # Priors vague on standardized scale:
+        zbeta0 ~ dnorm( 0 , 1/2^2 )
+        for ( j in 1:Nx ) {
+            zbeta[j] ~ dt( 0 , 1/sigmaBeta^2 , 1 ) 
+            delta[j] ~ dbern( 0.5 )
+        }
+        zsigma ~ dunif( 1.0E-5 , 1.0E+1 )
+        ## Uncomment one of the following specifications for sigmaBeta:
+        # sigmaBeta <- 2.0
+        # sigmaBeta ~ dunif( 1.0E-5 , 1.0E+2 )
+        sigmaBeta ~ dgamma(1.1051,0.1051) # mode 1.0, sd 10.0
+        # sigmaBeta <- 1/sqrt(tauBeta) ; tauBeta ~ dgamma(0.001,0.001) 
+        nu ~ dexp(1/30.0)
+        # Transform to original scale:
+        beta[1:Nx] <- ( delta[1:Nx] * zbeta[1:Nx] / xsd[1:Nx] )*ysd
+        beta0 <- zbeta0*ysd  + ym - sum( delta[1:Nx] * zbeta[1:Nx] * xm[1:Nx] / xsd[1:Nx] )*ysd
+        sigma <- zsigma*ysd
+    }
+"
+```
+
+```{r eval=FALSE}
+parameters <- c("beta0",
+    "beta",
+    "sigma",
+    "delta",
+    "sigmaBeta",
+    "zbeta0",
+    "zbeta",
+    "zsigma",
+    "nu")
+
+adaptSteps <- 500
+burnInSteps <- 1000
+numSavedSteps <- 15000
+thinSteps <- 25
+nChains <- 3
+
+runjagsMethod <- "parallel"  # change to "rjags" in case of working on 1-core cpu
+
+runJagsOut <- run.jags(
+  method = runjagsMethod,
+  model = modelString,
+  monitor = parameters,
+  data = data_list,
+  n.chains = nChains,
+  adapt = adaptSteps,
+  burnin = burnInSteps,
+  sample = ceiling(numSavedSteps / nChains),
+  thin = thinSteps,
+  summarise = FALSE,
+  plots = FALSE
+)
+```
+
+```{r echo=FALSE}
+# save(runJagsOut, file = "runJagsOut.rda")
+load("runJagsOut.rda")
+```
+
+Diagnostics:
+```{r}
+# plot all params
+plot(runJagsOut,
+     plot.type = c("trace", "ecdf", "histogram", "autocorr")
+     )
+```
+
+
+### Order predictors using their inclusion probabilities as a measure of relative importance
+
+```{r}
+trajectoriesDelta <- as.matrix(runJagsOut$mcmc[, 8:12])
+Nchain <- nrow(trajectoriesDelta)
+trajectoriesDelta %>% head()
+```
+
+Inclusion Probabilities:
+```{r}
+map_dbl(1:5, ~ sum(trajectoriesDelta[, .x] == 1) / Nchain) %>% 
+  set_names(paste0("Delta ", dimnames(data_list$x)[[2]])) %>% 
+  bind_rows() %>% 
+  gather(key = "delta", value = value) %>% 
+  ggplot(aes(fct_rev(fct_reorder(delta, value)), value)) +
+  geom_col(fill = "skyblue") +
+  scale_y_continuous(labels = scales::percent) +
+  labs(title = "Variable Importance MCMC",
+       x = "Delta",
+       y = "MCMC Delta Proportion")
+```
+
+Compare relevance of the following sub-models based on their observed frequencies:
+
+1. `Fertility ~ Agriculture + Examination`
+
+1. `Fertility ~ Education + Catholic + Infant.Mortality`
+
+1. `Fertility ~ Agriculture + Education + Catholic + Infant.Mortality`
+
+1. `Fertility ~ .`
+
+
+`Fertility ~ Agriculture + Education + Catholic + Infant.Mortality` was the most relevant with the highest frequency proportion of ~32%.
+```{r}
+delta_checks <- list("Agriculture + Examination" = c(1, 1, 0, 0, 0),
+                     "Education + Catholic + Infant.Mortality" = c(0, 0, 1, 1, 1),
+                     "Agriculture + Education + Catholic + Infant.Mortality" = c(1, 0, 1, 1, 1),
+                     "All predictors" = c(1, 1, 1, 1, 1))
+
+
+map(delta_checks, ~ sum(apply(trajectoriesDelta, 1, function(z) prod(z == .x)) / Nchain)) %>% 
+  set_names(paste0("Delta ", delta_checks %>% names)) %>% 
+  bind_rows() %>% 
+  gather(key = "delta", value = value) %>% 
+  ggplot(aes(fct_reorder(delta, value), value)) +
+  geom_col(fill = "skyblue") +
+  scale_y_continuous(labels = scales::percent) +
+  coord_flip() +
+  labs(title = "MCMC Sub-model comparison",
+       x = "Delta",
+       y = "MCMC Delta Frequency Proportion")
+```

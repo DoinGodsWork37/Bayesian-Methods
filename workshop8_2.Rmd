@@ -1,0 +1,181 @@
+---
+title: "Bayesian Methodologies - Lecture 8 - Workshop 2"
+author: "Joshua Goldberg"
+date: "12 November 2018"
+output: html_document
+editor_options: 
+  chunk_output_type: inline
+---
+
+```{r Preamble, echo=FALSE}
+# Enter package in p_load()
+# If package is not installed, p_load() will install and load the package
+if(!"pacman" %in% rownames(installed.packages())) {
+  install.packages("pacman")
+  }
+pacman::p_load(tidyverse, ggthemes, here, rstan, runjags)
+
+# Set default ggplot theme to tufte
+theme_set(ggthemes::theme_tufte())
+```
+
+This example is based on section 18.4 in [K].
+
+A Bayesian approach variable selection in regression analysis can be done by adding a binary parameter for each slope:
+Every combination of values gives a submodel.
+A simple priors for delta-indicators are independent bernoully distributions: dbern(0.5).
+Then posterior probabilities show importance of the corresponding predictors xi.
+The diagram of such model is an easy generalization of regression model.
+Since parameters ??i are discrete, we need to use JAGS.
+
+Read the data.
+```{r}
+myData <- read.csv("documents-MScA Bayesian Methods (32014)-MScA 32014 Lecture 9-Guber1999data.csv")
+head(myData)
+
+y <- myData[, "SATT"]
+x_names <- c("Spend", "PrcntTake", "StuTeaRat", "Salary")
+x <- as.matrix(myData[, x_names])
+```
+
+```{r}
+# prepare data for jags
+dataList <- list(
+    Ntotal = length(y),
+    y = y,
+    x = x,
+    Nx = ncol(x)
+)
+
+modelString = "
+    # Standardize the data:
+    data {
+        ym <- mean(y)
+        ysd <- sd(y)
+        for ( i in 1:Ntotal ) {
+            zy[i] <- ( y[i] - ym ) / ysd
+        }
+        for ( j in 1:Nx ) {
+            xm[j]  <- mean(x[,j])
+            xsd[j] <-   sd(x[,j])
+            for ( i in 1:Ntotal ) {
+                zx[i,j] <- ( x[i,j] - xm[j] ) / xsd[j]
+            }
+        }
+    }
+    # Specify the model for standardized data:
+    model {
+        for ( i in 1:Ntotal ) {
+            zy[i] ~ dt( zbeta0 + sum( delta[1:Nx] * zbeta[1:Nx] * zx[i,1:Nx] ) ,  1/zsigma^2 , nu )
+        }
+        # Priors vague on standardized scale:
+        zbeta0 ~ dnorm( 0 , 1/2^2 )
+        for ( j in 1:Nx ) {
+            zbeta[j] ~ dt( 0 , 1/sigmaBeta^2 , 1 ) 
+            delta[j] ~ dbern( 0.5 )
+        }
+        zsigma ~ dunif( 1.0E-5 , 1.0E+1 )
+        ## Uncomment one of the following specifications for sigmaBeta:
+        # sigmaBeta <- 2.0
+        # sigmaBeta ~ dunif( 1.0E-5 , 1.0E+2 )
+        sigmaBeta ~ dgamma(1.1051,0.1051) # mode 1.0, sd 10.0
+        # sigmaBeta <- 1/sqrt(tauBeta) ; tauBeta ~ dgamma(0.001,0.001) 
+        nu ~ dexp(1/30.0)
+        # Transform to original scale:
+        beta[1:Nx] <- ( delta[1:Nx] * zbeta[1:Nx] / xsd[1:Nx] )*ysd
+        beta0 <- zbeta0*ysd  + ym - sum( delta[1:Nx] * zbeta[1:Nx] * xm[1:Nx] / xsd[1:Nx] )*ysd
+        sigma <- zsigma*ysd
+    }
+"
+parameters <- c("beta0",  "beta",  "sigma", "delta", "sigmaBeta", "zbeta0", "zbeta", "zsigma", "nu" )
+adaptSteps <- 500
+burnInSteps <- 1000
+numSavedSteps <- 15000
+thinSteps <- 25
+nChains <- 3
+runjagsMethod <- "parallel"  # change to "rjags" in case of working on 1-core cpu 
+
+# run JAGS
+runJagsOut <- run.jags(
+    method = runjagsMethod,
+    model = modelString,
+    monitor = parameters,
+    data = dataList,
+    n.chains = nChains,
+    adapt = adaptSteps,
+    burnin = burnInSteps,
+    sample = ceiling(numSavedSteps / nChains),
+    thin = thinSteps,
+    summarise = FALSE,
+    plots = FALSE
+)
+```
+
+```{r}
+# convert to coda samples
+#codaSamples <- as.mcmc.list(runJagsOut)
+# concat all chains into one matrix (can be useful in case you want to calculate statistics by yourself):
+#mcmcMat <- as.matrix(codaSamples)
+
+# generate summary info for all parameters...
+summary(runJagsOut)
+```
+
+```{r}
+# plot all params
+plot(runJagsOut,
+     plot.type = c("trace", "ecdf", "histogram", "autocorr")
+     # , vars = 'delta'
+     )
+```
+
+Find posterior probability of different combinations of predictors by calculating frequencies with which they appeared in MCMC.
+```{r}
+trajectoriesDelta <- as.matrix(runJagsOut$mcmc[, 7:10])
+head(trajectoriesDelta)
+```
+
+```{r}
+Nchain <- nrow(trajectoriesDelta)
+```
+
+For model SATT Spend PrcntTake
+```{r}
+(config1 <- sum(apply(trajectoriesDelta, 1, function(z) prod(z == c(1, 1, 0, 0)))) / Nchain)
+```
+
+
+For model SATT=??0+??1 Spend
+
+```{r}
+(config2 <- sum(apply(trajectoriesDelta, 1, function(z) prod(z == c(1, 0, 0, 0)))) / Nchain)
+```
+
+For model SATT PrcntTake
+```{r}
+(config3 <- sum(apply(trajectoriesDelta, 1, function(z) prod(z == c(0, 1, 0, 0)))) / Nchain)
+```
+
+For model SATT= + 1 Spend + PrcntTake + StuTeaRat + Salary
+```{r}
+(config4 <- sum(apply(trajectoriesDelta, 1, function(z) prod(z == c(1, 1, 1, 1)))) / Nchain)
+```
+
+Inclusion Probabilities.
+```{r}
+(inclSpend <- sum(trajectoriesDelta[, 1] == 1) / Nchain) #Spend
+## [1] 0.6102
+(inclPrcntTake <- sum(trajectoriesDelta[, 2] == 1) / Nchain) #PrcntTake
+## [1] 1
+(inclStueTeaRat <- sum(trajectoriesDelta[, 3] == 1) / Nchain) #StueTeaRat
+## [1] 0.1771333
+(inclSalary <- sum(trajectoriesDelta[, 4] == 1) / Nchain) #Salary
+## [1] 0.2204667
+```
+
+Conclusions:
+Out of 4 analyzed configurations of the model the most observed is configuration 1 (0.4752).
+For configuration 4 with all predictors observation rate is just 0.0224.
+Out of 4 variables two are selected with inclusion probabilities above 0.5, those are "Spend" (0.6102) and "PrcntTake" (1).
+The second variable "PrcntTake" is included with non-stochastic probability of 1, standard deviation of ??2 is zero.
+Warning. Posterior probabilities of inclusion may be very sensitive to prior information.

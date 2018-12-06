@@ -368,8 +368,8 @@ a <- dat$plot_data %>%
                 Steps: {scales::comma(iterations)}"),
        subtitle = glue::glue("Accepted Proposal Path Random Starts: {length(runs)}
                              Standard devation: {sd}")) +
-  # transition_time(step) +
-  # ease_aes("linear")
+  transition_time(step) +
+  ease_aes("linear") +
   NULL
 
 # Create plotly graph
@@ -392,7 +392,7 @@ a <- dat$plot_data %>%
   transition_time(step) +
   ease_aes("linear")
 
-animate(a, nframes = 400, fps = 50, renderer = magick_renderer())
+animate(a, nframes = 400, fps = 20, renderer = magick_renderer())
 
 gganimate::save_animation(gganimate::last_animation(), "markov_chain_monte_carlo3.gif")
 ```

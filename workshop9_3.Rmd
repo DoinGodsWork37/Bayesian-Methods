@@ -1,0 +1,991 @@
+---
+title: "Workshop 3 Lecture 8"
+author: "Ami Parikh"
+date: "26 November 2018"
+output: html_document
+---
+
+library(rstan)
+1 Logistic regression
+1.1 Prediction of gender by hight and weight. Probability close to 0.5
+Dichotomous y with multiple metric predictors.
+
+Logistic regression model has the following diagram.
+
+Height-Weight Data
+
+```{r}
+mydf <- read.csv(file=paste(dataPath,'HtWtData300.csv',sep="/"))
+head(mydf)
+```
+
+```{r}
+plot(mydf$height,mydf$weight,pch=16,col="blue")
+points(mydf$height[mydf$male==1],mydf$weight[mydf$male==1],col="orange",pch=16)
+legend("topleft",legend=c("Female","Male"),col=c("blue","orange"),pch=16)
+```
+
+Model for Dichotomous y with multiple metric predictors
+```{r}
+modelString<-"
+data {
+int<lower=1> Ntotal; // num of observations
+int<lower=1> Nx;     // num of predictors
+int<lower=0, upper=1> y[Ntotal];
+matrix[Ntotal, Nx] x;
+}
+transformed data {
+vector[Nx] meanX;
+vector[Nx] sdX;
+matrix[Ntotal, Nx] zx; // normalized
+
+for ( j in 1:Nx ) {
+meanX[j] = mean(x[,j]);
+sdX[j] = sd(x[,j]);
+for ( i in 1:Ntotal ) {
+zx[i,j] = ( x[i,j] - meanX[j] ) / sdX[j];
+}
+}
+}
+parameters {
+real zbeta0;
+vector[Nx] zbeta;
+}
+transformed parameters{
+vector[Ntotal] mu;
+mu = zbeta0 + zx * zbeta;  // matrix product
+}
+model {
+zbeta0 ~ normal(0, 2);
+zbeta  ~ normal(0, 2);
+y ~ bernoulli_logit(mu);
+}
+generated quantities { 
+// Transform to original scale:
+real beta0; 
+vector[Nx] beta;
+// .* and ./ are element-wise product and division
+beta0 = zbeta0 - sum( zbeta .* meanX ./ sdX );
+beta = zbeta ./ sdX;
+} 
+"
+
+```
+
+```{r}
+stanDsoLogistic<-stan_model( model_code=modelString )
+
+```
+
+If saved DSO is used load it, then run the chains.
+
+```{r}
+save(stanDsoLogistic,file=paste(dataPath,"stanLogisticDso.Rds",sep="/"))
+load(file=paste(dataPath,"stanLogisticDso.Rds",sep="/"))
+Fit model
+
+heightWeightDataList<-list(Ntotal=nrow(mydf),
+                          y=mydf$male,
+                          x=cbind(mydf$height, mydf$weight),
+                          Nx=2)
+fit <- sampling(stanDsoLogistic,
+                data=heightWeightDataList, 
+                pars=c('beta0', 'beta'),
+                iter=5000, chains = 2, cores = 2
+)
+
+```
+
+Analyze fitted model using shinystan
+
+```{r}
+
+library(shinystan)
+launch_shinystan(fit)
+```
+
+Analyze parameters.
+```{r}
+stan_ac(fit, separate_chains = T)
+
+```
+
+```{r}
+pairs(fit)
+```
+
+```{r}
+plot(fit)
+```
+
+```{r}
+plot(fit,pars=c("beta"))
+```
+
+```{r}
+plot(fit,pars=c("beta[2]"))
+```
+
+
+```{r}
+summary(fit)$summary[,c(1,4,8)]
+```
+
+Parameter ??2 is not significant with 95% HDI.
+```{r}
+stan_dens(fit)
+
+```
+
+```{r}
+estimBetas<-summary(fit)$summary[1:3,1]
+
+```
+
+Plot the data with separating hyperplane.
+
+```{r}
+plot(mydf$height,mydf$weight,pch=16,col="blue")
+points(mydf$height[mydf$male==1],mydf$weight[mydf$male==1],col="orange",pch=16)
+lines(mydf$height,-(estimBetas[1]+estimBetas[2]*mydf$height)/estimBetas[3])
+legend("topleft",legend=c("Female","Male"),col=c("blue","orange"),pch=16)
+```
+
+1.2 Prediction of gender by hight and weight. Probability close to extreme
+Now try to remove almost all males from the sample to see what may happen when there are few 1's observed.
+
+In the original sample the proportion of males is:
+
+```{r}
+mean(mydf$male)
+
+```
+
+
+Sample with females is
+
+```{r}
+females <- mydf[mydf$male == 0,]
+
+```
+
+Select first 15 males.
+
+```{r}
+males <- mydf[mydf$male == 1,][1:15,] # just 15 males (originally was ~150)
+mydf_sparse <- rbind(males,females)
+rownames(mydf_sparse) <- NULL
+head(mydf_sparse,20)
+```
+
+
+Fit sparse model
+
+```{r}
+heightWeightSparseDataList<-list(Ntotal=nrow(mydf_sparse),
+                                 y=mydf_sparse$male,
+                                 x=cbind(mydf_sparse$height, mydf_sparse$weight),
+                                 Nx=2)
+fit_sparse <- sampling(stanDsoLogistic,
+                       data=heightWeightSparseDataList, 
+                       pars=c('beta0', 'beta'),
+                       iter=5000, chains = 2, cores = 2
+)
+stan_ac(fit_sparse, separate_chains = T)
+```
+
+
+```{r}
+pairs(fit_sparse)
+```
+
+```{r}
+plot(fit_sparse)
+```
+
+
+```{r}
+plot(fit_sparse,pars=c("beta"))
+```
+
+```{r}
+plot(fit_sparse,pars=c("beta[2]"))
+```
+
+Compare summary of the two studies
+
+```{r}
+rbind(beta0reg=summary(fit)$summary[1,c(1,3)],
+      beta0sparce=summary(fit_sparse)$summary[1,c(1,3)])
+```
+
+```{r}
+rbind(beta0reg=summary(fit)$summary[1,c(4,8)],
+      beta0sparce=summary(fit_sparse)$summary[1,c(4,8)])
+```
+
+```{r}
+rbind(beta1reg=summary(fit)$summary[2,c(4,8)],
+      beta1sparce=summary(fit_sparse)$summary[2,c(4,8)])
+```
+
+```{r}
+rbind(beta2reg=summary(fit)$summary[3,c(4,8)],
+      beta2sparce=summary(fit_sparse)$summary[3,c(4,8)])
+```
+
+HDI of both slopes widened significantly in the sample with more extreme disproportion.
+Standard deviations of betas also increase dramatically.
+
+2 Robust logistic regression
+2.1 Prediction of gender by height and weight. Robust model
+Observe the data of the previous section.
+Plot male and female groups with respect to weight.
+
+```{r}
+plot(mydf$weight,mydf$male)
+
+```
+
+In the lower right corner there are some outliers representing heavy femails.
+Such observations cause bias of model parameters.
+
+```{r}
+plot(mydf$height,mydf$male)
+
+```
+
+Select beta distribution as a prior to alpha with high concentration near zero: dbeta(1,9).
+
+```{r}
+Argument<-seq(from=0,to=1,by=.01)
+plot(Argument,dbeta(Argument,1,9),type="l")
+
+```
+
+
+The modified model is on the diagram.
+
+```{r}
+
+
+modelString= 
+"data {                   // ROBUST LOGISTIC REGRESSION
+    int<lower=1> Ntotal;  // num of observations
+    int<lower=1> Nx;      // num of predictors
+    int<lower=0, upper=1> y[Ntotal];
+    matrix[Ntotal, Nx] x;
+}
+transformed data {
+    vector[Nx] meanX;
+    vector[Nx] sdX;
+    matrix[Ntotal, Nx] zx;  // normalized
+    
+    for ( j in 1:Nx ) {
+        meanX[j] = mean(x[,j]);
+        sdX[j] = sd(x[,j]);
+        for ( i in 1:Ntotal ) {
+            zx[i,j] = ( x[i,j] - meanX[j] ) / sdX[j];
+        }
+    }
+}
+parameters {
+    real zbeta0;
+    vector[Nx] zbeta;
+    real<lower=0,upper=1> guess;  // mixture param
+}
+transformed parameters{
+    vector[Ntotal] mu;
+    for ( i in 1:Ntotal ) {
+        mu[i] = guess * (1/2.0) + (1-guess) * inv_logit(zbeta0 + zx[i,] * zbeta);
+    }
+}
+model {
+    zbeta0 ~ normal(0, 2);
+    zbeta  ~ normal(0, 2);
+    guess ~ beta(1, 9);
+    y ~ bernoulli(mu);
+}
+generated quantities { 
+    // Transform to original scale:
+    real beta0; 
+    vector[Nx] beta;
+    // .* and ./ are element-wise product and division
+    beta0 =  zbeta0 - sum( zbeta .* meanX ./ sdX );
+    beta =  zbeta ./ sdX;
+}
+"
+stanDsoRobustLogistic<-stan_model( model_code=modelString )
+```
+
+If saved DSO is used load it, then run the chains.
+```{r}
+save(stanDsoRobustLogistic,file=paste(dataPath,"stanRobustLogisticDso.Rds",sep="/"))
+load(file=paste(dataPath,"stanRobustLogisticDso.Rds",sep="/"))
+
+```
+
+Run robust MCMC with the hight/weight data.
+
+```{r}
+fitRobust <- sampling(stanDsoRobustLogistic,
+                data=heightWeightDataList, 
+                pars=c('beta0', 'beta', 'guess'),
+                iter=5000, chains = 2, cores = 2
+)
+
+```
+
+Analyze results.
+
+```{r}
+stan_ac(fitRobust, separate_chains = T)
+
+```
+
+
+```{r}
+pairs(fitRobust)
+```
+
+```{r}
+plot(fitRobust)
+```
+
+```{r}
+plot(fitRobust,pars=c("beta[1]"))
+```
+
+```{r}
+plot(fitRobust,pars=c("beta[2]"))
+```
+
+```{r}
+plot(fitRobust,pars=c("guess"))
+```
+
+```{r}
+rbind(summary(fitRobust)$summary[,c(1,4,7)],
+      summary(fit)$summary[,c(1,4,8)]
+)
+```
+
+
+```{r}
+heightWeightDataList<-list(Ntotal=nrow(mydf),
+                          y=mydf$male,
+                          x=cbind(mydf$height),
+                          Nx=1)
+
+
+fit <- sampling(stanDsoLogistic,
+                data=heightWeightDataList, 
+                pars=c('beta0', 'beta'),
+                iter=5000, chains = 2, cores = 2
+)
+fitRobust <- sampling(stanDsoRobustLogistic,
+                data=heightWeightDataList, 
+                pars=c('beta0', 'beta', 'guess'),
+                iter=5000, chains = 2, cores = 2
+)
+```
+
+```{r}
+pairs(fit)
+
+```
+
+```{r}
+pairs(fitRobust)
+```
+
+
+```{r}
+plot(fit)
+```
+
+```{r}
+plot(fit,pars=c("beta"))
+```
+
+```{r}
+plot(fitRobust)
+```
+
+
+
+```{r}
+plot(fitRobust,pars=c("beta[1]","guess"))
+```
+
+
+```{r}
+plot(fitRobust,pars=c("guess"))
+```
+
+```{r}
+rbind(summary(fitRobust)$summary[,c(1,4,7)],
+      summary(fit)$summary[,c(1,4,8)]
+)
+```
+
+Compare probabilities predicted by logistic regression and robust logistic regression.
+
+```{r}
+
+# Coefficients
+meanBeta0Robust<-summary(fitRobust)$summary[1,1]
+meanBeta1Robust<-summary(fitRobust)$summary[2,1]
+guess<-summary(fitRobust)$summary[3,1]
+meanBeta0<-summary(fit)$summary[1,1]
+meanBeta1<-summary(fit)$summary[2,1]
+
+#Linear predictors and probabilities
+linPredRobust_Male.Height<-meanBeta0Robust+meanBeta1Robust*mydf$height
+pRobustMail_height<-guess/2+(1-guess)*exp(linPredRobust_Male.Height)/(1+exp(linPredRobust_Male.Height))
+linPred_Male.Height<-meanBeta0+meanBeta1*mydf$height
+pMail_height<-exp(linPred_Male.Height)/(1+exp(linPred_Male.Height))
+
+# Plot
+plot(mydf$height,mydf$male,pch=16)
+points(mydf$height,pRobustMail_height,col="orange",pch=16)
+points(mydf$height,pMail_height,col="cyan",pch=16)
+legend("topleft",
+       legend=c("Actual","Prob Logistic","Prob. Robust"),
+       col=c("black","cyan","orange"),pch=16)
+```
+
+2.2 Prediction of gender by height and weight with sparse data. Robust model
+Repeat the same comparison with the sparse data.
+
+Create data list with one predictor.
+
+
+```{r}
+heightWeightSparseDataList<-list(Ntotal=nrow(mydf_sparse),
+                                 y=mydf_sparse$male,
+                                 x=cbind(mydf_sparse$height),
+                                 Nx=1)
+
+```
+
+Fit both models.
+
+```{r}
+fitSparse <- sampling(stanDsoLogistic,
+                       data=heightWeightSparseDataList, 
+                       pars=c('beta0', 'beta'),
+                       iter=5000, chains = 2, cores = 2
+)
+
+```
+
+```{r}
+fitSparseRobust <- sampling(stanDsoRobustLogistic,
+                data=heightWeightSparseDataList, 
+                pars=c('beta0', 'beta', 'guess'),
+                iter=5000, chains = 2, cores = 2
+)
+```
+
+
+Analyze the models.
+
+```{r}
+
+pairs(fitSparse)
+```
+
+```{r}
+pairs(fitSparseRobust)
+```
+
+```{r}
+plot(fitSparse)
+```
+
+```{r}
+plot(fitSparse,pars=c("beta"))
+```
+
+```{r}
+plot(fitSparseRobust)
+```
+
+```{r}
+plot(fitSparseRobust,pars=c("beta[1]","guess"))
+```
+
+```{r}
+plot(fitSparseRobust,pars=c("guess"))
+```
+
+```{r}
+rbind(summary(fitSparseRobust)$summary[,c(1,4,7)],
+      summary(fitSparse)$summary[,c(1,4,8)]
+)
+```
+
+```{r}
+#Make plot of probabilities.
+
+# Coefficients
+meanBeta0Robust<-summary(fitSparseRobust)$summary[1,1]
+meanBeta1Robust<-summary(fitSparseRobust)$summary[2,1]
+guess<-summary(fitSparseRobust)$summary[3,1]
+meanBeta0<-summary(fitSparse)$summary[1,1]
+meanBeta1<-summary(fitSparse)$summary[2,1]
+
+#Linear predictors and probabilities
+linPredRobust_Male.Height<-meanBeta0Robust+meanBeta1Robust*mydf_sparse$height
+pRobustMail_height<-guess/2+(1-guess)*exp(linPredRobust_Male.Height)/(1+exp(linPredRobust_Male.Height))
+linPred_Male.Height<-meanBeta0+meanBeta1*mydf_sparse$height
+pMail_height<-exp(linPred_Male.Height)/(1+exp(linPred_Male.Height))
+
+# Plot
+plot(mydf_sparse$height,mydf_sparse$male,pch=16)
+points(mydf_sparse$height,pRobustMail_height,col="orange",pch=16)
+points(mydf_sparse$height,pMail_height,col="cyan",pch=16)
+legend("topleft",
+       legend=c("Actual","Prob Logistic","Prob. Robust"),
+       col=c("black","cyan","orange"),pch=16)
+```
+
+2.3 Anesthesia example
+2.3.1 Data
+This data example is from library DAAG.
+Thirty patients were given an anesthetic agent maintained at a predetermined concentration level (conc) for 15 minutes before making an incision.
+It was then noted whether the patient moved (1), i.e. jerked or twisted.
+
+
+```{r}
+library(DAAG)
+
+head(anesthetic)
+
+```
+
+Use column move as response and column logconc as predictor.
+
+Prepare the data.
+
+```{r}
+dataListAnesthetic<-list(Ntotal=nrow(anesthetic),
+                          y=anesthetic$move,
+                          x=cbind(anesthetic$logconc),
+                          Nx=1)
+```
+
+2.3.2 Logistic model by glm()
+
+```{r}
+logRegr<-glm(move~logconc,data=anesthetic,family="binomial")
+summary(logRegr)
+```
+
+
+```{r}
+predLogRegr<-predict(logRegr,type="response")
+
+```
+
+2.3.3 Running chains
+Run MCMC using logistic and robust logistic models.
+
+```{r}
+fitAnesth <- sampling(stanDsoLogistic,
+                data=dataListAnesthetic, 
+                pars=c('beta0', 'beta'),
+                iter=5000, chains = 2, cores = 2
+)
+
+```
+
+```{r}
+fitRobustAnesth <- sampling(stanDsoRobustLogistic,
+                             data=dataListAnesthetic, 
+                              pars=c('beta0', 'beta', 'guess'),
+                              iter=5000, chains = 2, cores = 2
+)
+
+```
+
+
+2.3.4 Analysis of logistic model
+Look at shiny_stan()
+
+```{r}
+library(shinystan)
+launch_shinystan(fitAnesth)
+
+```
+
+Or extract diagnostics
+```{r}
+summary(fitAnesth)$summary[,c(1,4,8:10)]
+```
+
+```{r}
+stan_ac(fitAnesth, separate_chains = T)
+```
+
+```{r}
+stan_trace(fitAnesth)
+```
+
+```{r}
+pairs(fitAnesth,pars=c("beta0","beta"))
+```
+
+```{r}
+plot(fitAnesth)
+```
+
+2.3.5 Aalysis of robust logistic model
+```{r}
+
+summary(fitRobustAnesth)$summary[,c(1,4,8:10)]
+```
+
+```{r}
+stan_ac(fitRobustAnesth, separate_chains = T)
+```
+
+```{r}
+stan_trace(fitRobustAnesth)
+```
+
+```{r}
+pairs(fitRobustAnesth,pars=c("beta0","beta","guess"))
+```
+
+```{r}
+plot(fitRobustAnesth)
+```
+
+```{r}
+plot(fitRobustAnesth,pars=c("guess"))
+```
+
+Parameter guess is almost 10%. This means that there should be a significant difference between the two models.
+However, 95% HDI almost covers zero.
+
+2.3.6 Comparison of logistic and robust logistic models
+Compare intercepts.
+
+```{r}
+rbind(Logistic=summary(fitAnesth)$summary[1,c(1,4,8)],
+      Robust=summary(fitRobustAnesth)$summary[1,c(1,4,8)])
+```
+
+Compare slopes.
+
+```{r}
+rbind(Logistic=summary(fitAnesth)$summary[2,c(1,4,8)],
+      Robust=summary(fitRobustAnesth)$summary[2,c(1,4,8)])
+
+```
+
+```{r}
+#Compare probabilities.
+
+# Coefficients
+meanBeta0Robust<-summary(fitRobustAnesth)$summary[1,1]
+meanBeta1Robust<-summary(fitRobustAnesth)$summary[2,1]
+guess<-summary(fitRobustAnesth)$summary[3,1]
+meanBeta0<-summary(fitAnesth)$summary[1,1]
+meanBeta1<-summary(fitAnesth)$summary[2,1]
+
+#Linear predictors and probabilities
+linPredRobust_Move<-meanBeta0Robust+meanBeta1Robust*anesthetic$logconc
+pRobustMove<-guess/2+(1-guess)*exp(linPredRobust_Move)/(1+exp(linPredRobust_Move))
+linPred_Move<-meanBeta0+meanBeta1*anesthetic$logconc
+pMove<-exp(linPred_Move)/(1+exp(linPred_Move))
+
+# Plot
+plot(anesthetic$logconc,anesthetic$move,pch=16)
+points(anesthetic$logconc,pRobustMove,col="orange",pch=15)
+points(anesthetic$logconc,pMove,col="cyan",pch=17)
+points(anesthetic$logconc,predLogRegr,col="purple",pch=25)
+legend("topright",
+       legend=c("Actual","Prob Logistic","Prob. Robust","Glm"),
+       col=c("black","cyan","orange","purple"),pch=c(16,17,15,25))
+```
+
+Again, robust method does not return extreme probabilities.
+
+3 Softmax regression
+
+3.1 Simulated data from the book
+The data "SoftmaxRegData1.csv" are from [K], chapter 22.
+
+```{r}
+myData = read.csv( file=paste(dataPath,"SoftmaxRegData1.csv",sep="/") )
+#myData = read.csv( file="SoftmaxRegData2.csv" )
+head(myData)
+```
+
+```{r}
+table(myData$Y)
+```
+
+```{r}
+idx2<-myData$Y==2
+idx3<-myData$Y==3
+idx4<-myData$Y==4
+
+plot(myData$X1,myData$X2,pch=16)
+points(myData$X1[idx2],myData$X2[idx2],pch=16,col="orange")
+points(myData$X1[idx3],myData$X2[idx3],pch=16,col="cyan")
+points(myData$X1[idx4],myData$X2[idx4],pch=16,col="magenta")
+```
+
+```{r}
+dataListSoftmax<-list(N=nrow(myData),  # num of observations
+                          K=max(myData$Y), # num of groups
+                          y=myData$Y,
+                          x=cbind(x1 = myData$X1, x2 = myData$X2),
+                          D=2)  # num of predictiors
+```
+
+3.2 Softmax model
+Describe the model.
+
+```{r}
+modelString="
+data {
+    int<lower=2> K;  // num of groups
+    int<lower=0> N;  // num of observations
+    int<lower=1> D;  // num of predictors 
+    int<lower=1,upper=K> y[N];
+    matrix[N, D] x;
+}
+transformed data {
+    row_vector[D] zeros;
+    row_vector[D] x_m;  // x means
+    row_vector[D] x_sd; // x standard deviations
+    matrix[N, D] zx;    // normalized x
+    zeros = rep_row_vector(0, D); // coefficients are zeros for the baseline class
+    for (j in 1:D) {
+        x_m[j] = mean(x[,j]);
+        x_sd[j] = sd(x[,j]);
+        zx[,j] = (x[,j] - x_m[j]) / x_sd[j];
+    }
+}
+parameters {
+    matrix[K-1,D] zbeta_raw;  // K-1 makes model identifiable
+    vector[K-1] zbeta0_raw;
+}
+transformed parameters {
+    vector[K] zbeta0;   // intersection coeffs
+    matrix[K, D] zbeta; // predictor coeffs
+    zbeta0 = append_row(0, zbeta0_raw);
+    zbeta = append_row(zeros, zbeta_raw); // add zeros for coefficients of the baseclass
+}
+model {
+    zbeta0_raw ~ normal(0, 5);
+    for (k in 1:(K-1))
+        zbeta_raw[k,] ~ normal(0, 5);
+    for (n in 1:N)
+        y[n] ~ categorical(softmax(zbeta0 + zbeta * to_vector(zx[n,]) ));
+}
+generated quantities {
+    vector[K] beta0;
+    matrix[K, D] beta;
+    // transform zbetas to original betas:
+    for (k in 1:K) {
+        beta0[k] = zbeta0[k];
+        for (j in 1:D) {
+            beta0[k] = beta0[k] - zbeta[k,j] * x_m[j] / x_sd[j];
+            beta[k,j] = zbeta[k,j] / x_sd[j];
+        }
+     }
+}
+"
+```
+
+
+Create DSO.
+
+```{r}
+modelSoftmax<-stan_model( model_code=modelString)
+```
+
+If saved DSO is used load it, then run the chains.
+
+```{r}
+save(modelSoftmax,file=paste(dataPath,"stanSoftmaxDso.Rds",sep="/"))
+load(file=paste(dataPath,"stanSoftmaxDso.Rds",sep="/"))
+fit <- sampling(modelSoftmax,
+                data=dataListSoftmax,
+                pars=c('beta0', 'beta'),
+                iter=5000, chains = 2, cores = 2
+)
+
+```
+
+3.3 Analysis
+Analyze fitted model using shinystan
+
+```{r}
+library(shinystan)
+launch_shinystan(fit)
+
+```
+
+Or check the chains directly.
+
+```{r}
+summary(fit)$summary[,c(1,4,8:10)]
+
+```
+
+The model has 4 classes and 2 predictors. The returned coefficients form a matrix
+
+```{r}
+stan_ac(fit, separate_chains = T)
+```
+
+```{r}
+stan_trace(fit)
+```
+
+```{r}
+pairs(fit,pars=c("beta0"))
+```
+
+```{r}
+pairs(fit,pars=c("beta"))
+```
+
+```{r}
+plot(fit)
+```
+
+3.4 Classification
+To predict classes use formula for probability of class k
+Create matrix of coefficients.
+
+```{r}
+SoftmaxCoeff<-summary(fit)$summary[1:12,c(1)]
+SoftmaxCoeff<-cbind(SoftmaxCoeff[1:4],matrix(SoftmaxCoeff[-(1:4)],ncol=2,byrow=T))
+rownames(SoftmaxCoeff)<-paste0("Class",1:4)
+SoftmaxCoeff
+```
+
+Create linear predictors.
+```{r}
+
+head(myData)
+```
+
+
+```{r}
+linPredictors<-apply(SoftmaxCoeff[,-1],1,function(z) z%*%t(myData[,1:2]))
+dim(linPredictors)
+
+```
+
+
+```{r}
+head(linPredictors)
+```
+
+```{r}
+linPredictors<-t(apply(linPredictors,1,function(z) z+SoftmaxCoeff[,1]))
+dim(linPredictors)
+```
+
+```{r}
+head(linPredictors)
+```
+
+Check calculation for the first row of the data and second class.
+
+```{r}
+
+
+row1<-myData[1,]
+Class2<-SoftmaxCoeff[2,1]+SoftmaxCoeff[2,2]*row1[1]+SoftmaxCoeff[2,3]*row1[2]
+c(Class2,linPredictors[1,2])
+```
+
+Create probabilities
+
+```{r}
+softmaxProb<-exp(linPredictors)/apply(exp(linPredictors),1,sum)
+apply(head(softmaxProb),1,sum)
+```
+
+Predict classes.
+
+```{r}
+predClass<-apply(softmaxProb,1,which.max)
+head(predClass)
+```
+
+Plot predicted classes and compare them with the data.
+
+```{r}
+idx2Pred<-predClass==2
+idx3Pred<-predClass==3
+idx4Pred<-predClass==4
+
+par(mfrow=c(1,2))
+plot(myData$X1,myData$X2,pch=16)
+points(myData$X1[idx2],myData$X2[idx2],pch=16,col="orange")
+points(myData$X1[idx3],myData$X2[idx3],pch=16,col="cyan")
+points(myData$X1[idx4],myData$X2[idx4],pch=16,col="magenta")
+
+plot(myData$X1,myData$X2,pch=16)
+points(myData$X1[idx2Pred],myData$X2[idx2Pred],pch=16,col="orange")
+points(myData$X1[idx3Pred],myData$X2[idx3Pred],pch=16,col="cyan")
+points(myData$X1[idx4Pred],myData$X2[idx4Pred],pch=16,col="magenta")
+```
+
+```{r}
+par(mfrow=c(1,1))
+
+```
+
+See how different classes are separated by hyperplanes.
+
+Add hyperplane between class 1 and class 2:
+
+```{r}
+plot(myData$X1,myData$X2,pch=16)
+points(myData$X1[idx2Pred],myData$X2[idx2Pred],pch=16,col="orange")
+points(myData$X1[idx3Pred],myData$X2[idx3Pred],pch=16,col="cyan")
+points(myData$X1[idx4Pred],myData$X2[idx4Pred],pch=16,col="magenta")
+lines(myData$X1,-(SoftmaxCoeff[2,1]+SoftmaxCoeff[2,2]*myData$X1)/SoftmaxCoeff[2,3],col="grey")
+```
+
+
+Add hyperplane between class 1 and class 3.
+
+```{r}
+
+
+plot(myData$X1,myData$X2,pch=16)
+points(myData$X1[idx2Pred],myData$X2[idx2Pred],pch=16,col="orange")
+points(myData$X1[idx3Pred],myData$X2[idx3Pred],pch=16,col="cyan")
+points(myData$X1[idx4Pred],myData$X2[idx4Pred],pch=16,col="magenta")
+lines(myData$X1,-(SoftmaxCoeff[2,1]+SoftmaxCoeff[2,2]*myData$X1)/SoftmaxCoeff[2,3],col="grey")
+lines(myData$X1,-(SoftmaxCoeff[3,1]+SoftmaxCoeff[3,2]*myData$X1)/SoftmaxCoeff[3,3],col="grey")
+```
+
+
+Add hyperplane between class 1 and class 4.
+
+```{r}
+
+plot(myData$X1,myData$X2,pch=16)
+points(myData$X1[idx2Pred],myData$X2[idx2Pred],pch=16,col="orange")
+points(myData$X1[idx3Pred],myData$X2[idx3Pred],pch=16,col="cyan")
+points(myData$X1[idx4Pred],myData$X2[idx4Pred],pch=16,col="magenta")
+lines(myData$X1,-(SoftmaxCoeff[2,1]+SoftmaxCoeff[2,2]*myData$X1)/SoftmaxCoeff[2,3],col="grey")
+lines(myData$X1,-(SoftmaxCoeff[3,1]+SoftmaxCoeff[3,2]*myData$X1)/SoftmaxCoeff[3,3],col="grey")
+lines(myData$X1,-(SoftmaxCoeff[4,1]+SoftmaxCoeff[4,2]*myData$X1)/SoftmaxCoeff[4,3],col="grey")
+
+```
+

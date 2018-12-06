@@ -1,0 +1,340 @@
+---
+title: "Course Project"
+author: "Joshua Goldberg"
+date: "`r format(Sys.time(), '%B, %d %Y')`"
+always_allow_html: yes
+output:
+  github_document: 
+  pdf_document: default
+editor_options: 
+  chunk_output_type: inline
+---
+
+```{r Global-options, include=FALSE}
+knitr::opts_chunk$set(fig.width=6, fig.asp=0.618, fig.path='Figs/',
+                      warning=FALSE, message=FALSE, cache=TRUE)
+```
+
+```{r Preamble, echo=FALSE}
+# Enter package in p_load()
+# If package is not installed, p_load() will install and load the package
+if(!"pacman" %in% rownames(installed.packages())) {
+  install.packages("pacman")
+  }
+pacman::p_load(tidyverse, ggthemes, here, shinystan, rstan, HDInterval) 
+
+# Set default ggplot theme to tufte
+theme_set(ggthemes::theme_tufte())
+```
+
+```{r Copy-files, echo=FALSE, eval=FALSE}
+# Enter files to load to project directory in from = "~/Downloads/your_file_name_here"
+file.copy(from = "~/Downloads/", to = here::here(), 
+          overwrite = TRUE, recursive = FALSE, 
+          copy.mode = TRUE)
+```
+
+The data of the project contains 5 factors:
+
+* `Sex` (2 levels)
+* `Race` (4 levels)
+* `Age` (5 levels)
+* `Education` (3 levels)
+* `State` (51 levels)
+
+The total number of combinations of levels is 6120.
+
+Look at the data.
+
+Check the variables notation:
+
+```{r}
+dat <- read.csv("assignments-Bayesian Methods-Course Project 32014-MScA_32014_BayesianMethods_CourseProjectData.csv")
+head(dat)
+```
+
+```{r}
+unique(dat$sex)
+unique(dat$race)
+unique(dat$age)
+unique(dat$education)
+unique(dat$state)
+```
+
+After running MCMC with the these data and the model obtain a Markov chain posterior sample for 870 parameters including 2-way interactions.
+Each Markov chain of the stan object `obama_fit` has length 36000.
+
+Explore the fitted model object.
+It is not necessary to reproduce the results shown below, but if you see significant differences, please, report.
+
+Launch `shinystan()` to explore the chains for convergence.
+
+```{r}
+load("assignments-Bayesian Methods-Course Project 32014-Run05272016-fit_ext_20160527_103144.Rdata")
+```
+
+```{r eval=FALSE}
+launch_shinystan(obama_fit)
+```
+
+Extract chains for further analysis.
+```{r}
+MCMC <- rstan::extract(obama_fit)
+MCMC %>% names()
+```
+
+Explore `sum.obama_fit` - summary of `obama_fit`.
+
+Find parameters which are significantly different from zero: zero does not belong to 95% HDI.
+Show selected parameters.
+```{r}
+sum.obama_fit <- summary(obama_fit)$summary %>% data.frame()
+
+significant_co <- function(stan_fit) {
+  summ <- summary(stan_fit)$summary %>% data.frame()
+  !(summ$X2.5. < 0 & summ$X97.5. > 0)
+}
+```
+
+```{r}
+sum.obama_fit[significant_co(obama_fit), c(4, 8)]
+```
+
+The model parameters are re-centered to satisfy additional constraint $(\sum_i \beta_i = 0)$, so, for example slopes of gender predictor are:
+
+```{r}
+sum.obama_fit[2:3, 1]
+sum(sum.obama_fit[2:3, 1])
+```
+
+As a result estimated intercept is close to 0.5:
+
+```{r}
+plot(obama_fit, pars = c("b_0"))
+hist(MCMC$b_0)
+mean(MCMC$b_0)
+```
+
+Plot HDIs for the 5 main parameters.
+For example:
+```{r}
+plot(obama_fit, pars = c("b_sex"))
+```
+
+Interpretation of interactions.
+Look, for example, at interaction between sex and race.
+
+```{r}
+plot(obama_fit, pars = c("b_sex_race"))
+```
+
+```{r}
+sum.obama_fit[67:74, c(1, 4, 8)]
+```
+
+Two of the coefficients are significantly different from zero:
+```{r}
+sum.obama_fit[c(67, 70), c(1, 4, 8)]
+```
+
+Recall that `sex[1]` is "Male" and `sex[2]` is "Female", and `race[1]` means "White" and `race[4]` means "Other".
+Main parameters and their corresponding interactions are then:
+
+```{r}
+sum.obama_fit[c(1:4, 7, 67, 70), c(1, 4, 8)]
+```
+
+Interpret these parameters as influence over odds ratio.
+```{r}
+(odds <- exp(sum.obama_fit[c(1:4, 7, 67, 70), c(1, 4, 8)][, 1]))
+```
+
+The baseline odds ratio is 1.643976, meaning that the ratio of people approving Obama as candidate to disapproving him is 1.643976.
+
+Among males the odds ratio is lower:
+```{r}
+prod(odds[1:2])
+```
+
+And among females it is higher:
+```{r}
+prod(odds[c(1, 3)])
+```
+
+Approval odds for whites and others are:
+```{r}
+prod(odds[c(1, 4)])
+prod(odds[c(1, 5)])
+```
+
+Approval odds among white males $(sex=1,race=1)$ is:
+```{r}
+prod(odds[c(1, 2, 4, 6)])
+```
+
+Which is better than in the case of no interaction:
+```{r}
+prod(odds[c(1, 2, 4)])
+```
+
+Note that since interaction `b_sex_race[2, 1]` is not significantly different from zero, odds of approval among white women most likely is just
+```{r}
+prod(odds[c(1, 3, 4)])
+```
+
+```{r}
+parse_params <- function(stan_fit) {
+  MCMC <- rstan::extract(stan_fit)
+  MCMC_names <- MCMC %>% names()
+  interactions <- MCMC_names[MCMC_names %>% str_detect("^[a-z]+_[a-z]+_[a-z]+$")]
+  interactions <- interactions[!str_detect(interactions, "var")]
+  sum_obama_fit <- summary(stan_fit)$summary %>% data.frame() %>% rownames_to_column(var = "variable")
+  parameters <- dimnames(stan_fit)$parameters
+  sv <- map(interactions, ~ {
+    sum_obama_fit[significant_co(stan_fit), ] %>% filter(variable %in% parameters[str_detect(parameters, glue::glue("^{.x}"))])
+    }) %>% set_names(interactions)
+  
+  list(sum_obama_fit = sum_obama_fit, sv = sv)
+}
+
+significant_interactions <- parse_params(obama_fit)
+```
+
+```{r}
+test <- data.frame(index = str_split(significant_interactions$sv$b_race_state$variable %>% str_extract("\\d,\\d"), ",") %>% unlist(), 
+                   var = significant_interactions$sv$b_race_state$variable %>% str_extract_all("[a-z]{2,10}") %>% unlist())
+
+significant_interactions$sum_obama_fit
+glue::glue("b_{test$var[1]}_{test$var[2]}[{test$index[1]}, {test$index[2]}]")
+
+unique(map(1:nrow(test), ~ glue::glue("b_{test$var[.x]}[{test$index[.x]}]")) %>% unlist())
+```
+
+# Project questions
+
+    1. Find the most supportive groups corresponding to each of the main effects for Barack Obama in 2012
+
+    1. Find the least supportive group corresponding to each of the main effects
+
+    1. Compare odds of approval by males grouped by race and education. Which of such subgroups shows the highest
+    and the lowest support for the candidate
+
+    1. Answer the same question, but for females
+
+For convenience create groups of necessary parameters and give them intuitive column names.
+
+```{r}
+ch_b0 <- MCMC$b_0
+ch_b_sex <- MCMC$b_sex
+colnames(ch_b_sex) <- levels(dat$sex)
+
+ch_b_race <- MCMC$b_race
+colnames(ch_b_race) <- levels(dat$race)
+
+ch_b_age <- MCMC$b_age
+colnames(ch_b_age) <- levels(dat$age)
+
+ch_b_education <- MCMC$b_education
+colnames(ch_b_education) <- levels(dat$education)
+
+ch_b_state <- MCMC$b_state
+colnames(ch_b_state) <- levels(dat$state)
+
+ch_b_sex_race <- MCMC$b_sex_race
+dimnames(ch_b_sex_race)[[2]] <- levels(dat$sex)
+dimnames(ch_b_sex_race)[[3]] <- levels(dat$race)
+
+ch_b_sex_education <- MCMC$b_sex_education
+dimnames(ch_b_sex_education)[[2]] <- levels(dat$sex)
+dimnames(ch_b_sex_education)[[3]] <- levels(dat$education)
+
+ch_b_race_education <- MCMC$b_race_education
+dimnames(ch_b_race_education)[[2]] <- levels(dat$race)
+dimnames(ch_b_race_education)[[3]] <- levels(dat$education)
+```
+
+# Main Effects
+## Grouped by gender
+Calculate mean, lower and upper HDI levels for odds of approval by gender.
+Calculate mean values and HDI limits for log-odds and then take exponents of them.
+
+```{r}
+calculate_odds <- function(var) {
+  rbind(mean = apply(var, 2, function(x) exp(mean(x + ch_b0))), apply(var, 2, function(x) exp(hdi(x + ch_b0))))
+}
+```
+
+```{r}
+calculate_odds(ch_b_sex)
+```
+
+## 4.1.2 Grouped by race
+```{r}
+calculate_odds(ch_b_race)
+```
+
+## 4.1.3 Grouped by age
+```{r}
+calculate_odds(ch_b_age)
+```
+
+## 4.1.4 Grouped by education
+```{r}
+calculate_odds(ch_b_education)
+```
+
+## 4.1.5 Grouped by state
+```{r}
+state_odds <- calculate_odds(ch_b_state)
+```
+
+```{r}
+plot(state_odds[1, ], type = "l")
+which.max(state_odds[1, ])
+which.min(state_odds[1, ])
+```
+
+# Interactions
+## Males
+
+Calculate mean values and log-odds limits for each race-education combination. Then take exponents of them.
+
+Calculate mean and HDI of each column of the cube.
+
+Compare groups.
+
+```{r}
+run <- 12
+ch_bo_cube <- purrr::rerun(run, cbind(ch_b0)) %>% 
+  bind_cols() %>% 
+  set_names(rep("ch_b0", run)) %>% 
+  as.matrix()
+dim(ch_bo_cube) <- dim(ch_b_race_education)
+
+ch_race_cube <- cbind(ch_b_race, ch_b_race, ch_b_race)
+dim(ch_race_cube) <- dim(ch_b_race_education)
+dimnames(ch_race_cube) <- dimnames(ch_b_race_education)
+
+ch_b_education_cube <- cbind(ch_b_education, ch_b_education, ch_b_education, ch_b_education)
+
+dim(ch_b_education_cube) <- dim(ch_b_race_education)[c(1, 3, 2)]
+
+ch_b_education_cube <- aperm(ch_b_education_cube, c(1, 3, 2))
+
+dimnames(ch_b_education_cube) <- dimnames(ch_b_race_education)
+
+total <- ch_bo_cube + ch_b_sex[, "1.Male"] + ch_race_cube + ch_b_education_cube + ch_b_race_education
+
+```
+
+```{r}
+apply(total, c(2, 3), function(x) mean(x))
+```
+
+
+
+
+
+
+
+

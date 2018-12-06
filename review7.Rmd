@@ -1,0 +1,105 @@
+---
+title: "Review 7"
+author: "Joshua Goldberg"
+date: "`r format(Sys.time(), '%B, %d %Y')`"
+always_allow_html: yes
+output:
+  github_document: 
+  pdf_document: default
+editor_options: 
+  chunk_output_type: inline
+---
+
+```{r Global-options, include=FALSE}
+knitr::opts_chunk$set(fig.width=6, fig.height=4, fig.path='Figs/',
+                      warning=FALSE, message=FALSE, cache=TRUE)
+```
+
+```{r Preamble, echo=FALSE}
+# Enter package in p_load()
+# If package is not installed, p_load() will install and load the package
+if(!"pacman" %in% rownames(installed.packages())) {
+  install.packages("pacman")
+  }
+pacman::p_load(tidyverse, ggthemes, here, car)
+
+# Set default ggplot theme to tufte
+theme_set(ggthemes::theme_tufte())
+
+# Parallel Stan
+rstan_options(auto_write = TRUE)
+options(mc.cores = parallel::detectCores())
+```
+
+```{r Copy-files, echo=FALSE, eval=FALSE}
+# Enter files to load to project directory in from = "~/Downloads/your_file_name_here"
+file.copy(from = "~/Downloads/", to = here::here(), 
+          overwrite = TRUE, recursive = FALSE, 
+          copy.mode = TRUE)
+```
+
+```{r}
+data("Salaries")
+head(Salaries)
+```
+
+```{r}
+N <- nrow(Salaries)
+salaries <- Salaries$salary
+rank_one <- as.numeric(Salaries$rank) == 1 
+rank_two <- as.numeric(Salaries$rank) == 2
+discipline <- Salaries$discipline
+yrs_service <- Salaries$yrs.service
+sex <- Salaries$sex
+```
+
+```{r}
+stan_rdump(c("N", "salaries", "rank_one", "rank_two", "discipline", "yrs_service", "sex"), file = "salaries.data.R")
+data <- read_rdump("salaries.data.R")
+map(data, ~ head(.x))
+```
+
+```{r}
+fit_interact <- stan(file = "review7_session_model1.stan", data = data, seed = 1)
+```
+
+```{r}
+plot(fit_interact)
+stan_dens(fit_interact)
+show(fit_interact)
+```
+
+```{r}
+data <- read.dta("ARM_Data/arsenic/all.dta")
+data <- data %>% select(distcw, arsenic, switch, ed4, assn)
+data <- na.omit(data)
+```
+
+```{r}
+N <- nrow(data)
+switched <- data$switch == "switch"
+dist <- data$distcw
+
+stan_rdump(c("N", "switched", "dist"), file = "wells.data.R")
+data <- read_rdump("wells.data.R")
+```
+
+```{r}
+fit_logit <- stan(file = "review7_session_model2.stan", data = data, seed = 1)
+```
+
+```{r}
+plot(fit_logit)
+stan_dens(fit_logit)
+show(fit_logit)
+```
+
+```{r}
+fit_logit_scale <- stan(file = "review7_session_model3.stan", data = data, seed = 1)
+```
+
+```{r}
+fit_logit_scale_interact <- stan(file = "review7_session_model4.stan", data = data, seed = 1)
+```
+
+
