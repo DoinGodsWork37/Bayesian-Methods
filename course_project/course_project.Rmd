@@ -182,34 +182,6 @@ Note that since interaction `b_sex_race[2, 1]` is not significantly different fr
 prod(odds[c(1, 3, 4)])
 ```
 
-```{r}
-parse_params <- function(stan_fit) {
-  MCMC <- rstan::extract(stan_fit)
-  MCMC_names <- MCMC %>% names()
-  interactions <- MCMC_names[MCMC_names %>% str_detect("^[a-z]+_[a-z]+_[a-z]+$")]
-  interactions <- interactions[!str_detect(interactions, "var")]
-  sum_obama_fit <- summary(stan_fit)$summary %>% data.frame() %>% rownames_to_column(var = "variable")
-  parameters <- dimnames(stan_fit)$parameters
-  sv <- map(interactions, ~ {
-    sum_obama_fit[significant_co(stan_fit), ] %>% filter(variable %in% parameters[str_detect(parameters, glue::glue("^{.x}"))])
-    }) %>% set_names(interactions)
-  
-  list(sum_obama_fit = sum_obama_fit, sv = sv)
-}
-
-significant_interactions <- parse_params(obama_fit)
-```
-
-```{r}
-test <- data.frame(index = str_split(significant_interactions$sv$b_race_state$variable %>% str_extract("\\d,\\d"), ",") %>% unlist(), 
-                   var = significant_interactions$sv$b_race_state$variable %>% str_extract_all("[a-z]{2,10}") %>% unlist())
-
-significant_interactions$sum_obama_fit
-glue::glue("b_{test$var[1]}_{test$var[2]}[{test$index[1]}, {test$index[2]}]")
-
-unique(map(1:nrow(test), ~ glue::glue("b_{test$var[.x]}[{test$index[.x]}]")) %>% unlist())
-```
-
 # Project questions
 
     1. Find the most supportive groups corresponding to each of the main effects for Barack Obama in 2012
