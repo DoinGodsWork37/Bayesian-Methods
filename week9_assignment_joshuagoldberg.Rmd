@@ -66,7 +66,7 @@ plot(grMeans)
 
 ## 1.1 Model with estimated hyper-parameter
 
-1. Fit model described on the diagram:
+1. Fit model described in the diagram:
 ```{r, echo=FALSE}
 knitr::include_graphics("documents-MScA Bayesian Methods (32014)-MScA 32014 Lecture 10-kruschke_style_MetOutNomPred.gif")
 ```
@@ -385,7 +385,7 @@ ggplot(contrast_data, aes(contrast), color = "skyblue") +
        y = "Count")
 ```
 
-Additionally, the densities overlap nearly completely. Note the densities for `model_no_hyper_parameter` overlap due to the exclusion of the hyper prior. The upshot is all the groups get a the same $\sigma$.
+Additionally, the densities overlap nearly completely. Note the densities for `model_no_hyper_parameter` overlap due to the exclusion of the hyper parameter The upshot is all the groups get a the same $\sigma$.
 ```{r}
 plot(
   u_density,
@@ -450,5 +450,5 @@ data_difference %>%
        y = "Group Differences")
 ```
 
-Eliminating the hyper parameter $\sigma\alpha$ resulted in MCMC estimating the actual group differences in the data, as seen in the plot above. This essentially resulted in a fixed effects model, while including the hypter parameter introduces random effects that focus on the population rather than the difference between the groups. 
+Eliminating the hyper parameter $\sigma\alpha$ resulted in MCMC estimating the actual group differences in the data, as seen in the plot above. This essentially resulted in a fixed effects model, while including the hyper parameter introduces random effects that focus on the population rather than the difference between the groups. 
 

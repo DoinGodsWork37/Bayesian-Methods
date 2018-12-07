@@ -4,15 +4,21 @@ author: "Joshua Goldberg"
 date: "`r format(Sys.time(), '%B, %d %Y')`"
 always_allow_html: yes
 output:
-  github_document: 
-  pdf_document: default
+  html_document:
+    theme: united
+    df_print: paged
+    highlight: textmate
+    code_folding: show
+    toc: true
+    toc_float: true
+  github_document:
 editor_options: 
   chunk_output_type: inline
 ---
 
 ```{r Global-options, include=FALSE}
 knitr::opts_chunk$set(fig.width=6, fig.asp=0.618, fig.path='Figs/',
-                      warning=FALSE, message=FALSE, cache=TRUE)
+                      warning=FALSE, message=FALSE)
 ```
 
 ```{r Preamble, echo=FALSE}
@@ -34,6 +40,7 @@ file.copy(from = "~/Downloads/", to = here::here(),
           copy.mode = TRUE)
 ```
 
+# Data
 The data of the project contains 5 factors:
 
 * `Sex` (2 levels)
@@ -61,6 +68,7 @@ unique(dat$education)
 unique(dat$state)
 ```
 
+# Model
 After running MCMC with the these data and the model obtain a Markov chain posterior sample for 870 parameters including 2-way interactions.
 Each Markov chain of the stan object `obama_fit` has length 36000.
 
@@ -77,12 +85,14 @@ load("assignments-Bayesian Methods-Course Project 32014-Run05272016-fit_ext_2016
 launch_shinystan(obama_fit)
 ```
 
-Extract chains for further analysis.
+# Analysis
+## Extract chains for further analysis
 ```{r}
 MCMC <- rstan::extract(obama_fit)
 MCMC %>% names()
 ```
 
+## Significant parameters
 Explore `sum.obama_fit` - summary of `obama_fit`.
 
 Find parameters which are significantly different from zero: zero does not belong to 95% HDI.
@@ -115,12 +125,14 @@ hist(MCMC$b_0)
 mean(MCMC$b_0)
 ```
 
+## Reviewing main effects
 Plot HDIs for the 5 main parameters.
 For example:
 ```{r}
 plot(obama_fit, pars = c("b_sex"))
 ```
 
+## Interactions
 Interpretation of interactions.
 Look, for example, at interaction between sex and race.
 
@@ -151,7 +163,6 @@ Interpret these parameters as influence over odds ratio.
 
 The baseline odds ratio is 1.643976, meaning that the ratio of people approving Obama as candidate to disapproving him is 1.643976.
 
-Among males the odds ratio is lower:
 ```{r}
 prod(odds[1:2])
 ```
@@ -161,65 +172,41 @@ And among females it is higher:
 prod(odds[c(1, 3)])
 ```
 
-Approval odds for whites and others are:
+Approval odds for 1.Whiteand 4.Other are:
 ```{r}
+odds[c(1, 4)]
 prod(odds[c(1, 4)])
+odds[c(1, 5)]
 prod(odds[c(1, 5)])
 ```
 
 Approval odds among white males $(sex=1,race=1)$ is:
 ```{r}
+odds[c(1, 2, 4, 6)]
 prod(odds[c(1, 2, 4, 6)])
 ```
 
-Which is better than in the case of no interaction:
+Which is better than in the case when interaction is not included:
 ```{r}
+odds[c(1, 2, 4)]
 prod(odds[c(1, 2, 4)])
 ```
 
-Note that since interaction `b_sex_race[2, 1]` is not significantly different from zero, odds of approval among white women most likely is just
+Note that since interaction `b_sex_race[2,1]` is not significantly different from zero, odds of approval among white women may not be significantly different from
 ```{r}
+odds[c(1, 3, 4)]
 prod(odds[c(1, 3, 4)])
-```
-
-```{r}
-parse_params <- function(stan_fit) {
-  MCMC <- rstan::extract(stan_fit)
-  MCMC_names <- MCMC %>% names()
-  interactions <- MCMC_names[MCMC_names %>% str_detect("^[a-z]+_[a-z]+_[a-z]+$")]
-  interactions <- interactions[!str_detect(interactions, "var")]
-  sum_obama_fit <- summary(stan_fit)$summary %>% data.frame() %>% rownames_to_column(var = "variable")
-  parameters <- dimnames(stan_fit)$parameters
-  sv <- map(interactions, ~ {
-    sum_obama_fit[significant_co(stan_fit), ] %>% filter(variable %in% parameters[str_detect(parameters, glue::glue("^{.x}"))])
-    }) %>% set_names(interactions)
-  
-  list(sum_obama_fit = sum_obama_fit, sv = sv)
-}
-
-significant_interactions <- parse_params(obama_fit)
-```
-
-```{r}
-test <- data.frame(index = str_split(significant_interactions$sv$b_race_state$variable %>% str_extract("\\d,\\d"), ",") %>% unlist(), 
-                   var = significant_interactions$sv$b_race_state$variable %>% str_extract_all("[a-z]{2,10}") %>% unlist())
-
-significant_interactions$sum_obama_fit
-glue::glue("b_{test$var[1]}_{test$var[2]}[{test$index[1]}, {test$index[2]}]")
-
-unique(map(1:nrow(test), ~ glue::glue("b_{test$var[.x]}[{test$index[.x]}]")) %>% unlist())
 ```
 
 # Project questions
 
-    1. Find the most supportive groups corresponding to each of the main effects for Barack Obama in 2012
+1. Find the most supportive groups corresponding to each of the main effects for Barack Obama in 2012. 
 
-    1. Find the least supportive group corresponding to each of the main effects
+1. Find the least supportive group corresponding to each of the main effects.
 
-    1. Compare odds of approval by males grouped by race and education. Which of such subgroups shows the highest
-    and the lowest support for the candidate
+1. Compare odds of approval by males grouped by race and education. Which of such subgroups shows the highest and the lowest support for the candidate.
 
-    1. Answer the same question, but for females
+1. Answer the same question, but for females
 
 For convenience create groups of necessary parameters and give them intuitive column names.
 
@@ -253,8 +240,8 @@ dimnames(ch_b_race_education)[[2]] <- levels(dat$race)
 dimnames(ch_b_race_education)[[3]] <- levels(dat$education)
 ```
 
-# Main Effects
-## Grouped by gender
+## Main effects
+### Grouped by gender
 Calculate mean, lower and upper HDI levels for odds of approval by gender.
 Calculate mean values and HDI limits for log-odds and then take exponents of them.
 
@@ -264,38 +251,99 @@ calculate_odds <- function(var) {
 }
 ```
 
+### Grouped by sex
 ```{r}
-calculate_odds(ch_b_sex)
+(ch_b_sex_odds <- calculate_odds(ch_b_sex))
+which.max(ch_b_sex_odds[1, ])
+which.min(ch_b_sex_odds[1, ])
 ```
 
-## 4.1.2 Grouped by race
+Define convenience function for plotting:
 ```{r}
-calculate_odds(ch_b_race)
+add_spaces <- function(string) {
+  str_remove_all(string, "\\d\\.") %>% 
+      str_replace_all("([[:upper:]])", " \\1") %>% 
+      str_trim("both")
+} 
+
+plot_odds <- function(odds_matrix) {
+  data <- odds_matrix[1,] %>%
+    data.frame(odds = .) %>%
+    rownames_to_column(var = "var")
+  
+  edu_check <- unique(data$var %>% str_detect("College"))
+  
+  if (edu_check) {
+    edu_names <- add_spaces(data$var)
+  }
+  
+  data <- data %>% 
+    mutate(var = str_remove_all(var, "\\d\\.")) %>% 
+    mutate(var = if(edu_check) edu_names else var,
+           var = factor(var, levels = var[order(odds, decreasing = TRUE)], ordered = TRUE))
+  age_check <- unique(data$var %>% str_detect("\\d"))
+  data %>% 
+    ggplot(aes(var, odds), odds) +
+    geom_col(fill = "skyblue") +
+    labs(
+      title = glue::glue("{levels(data$var)[1]}{ifelse(age_check, ' Age Group', '')} Shows Highest Support for Obama"),
+      x = "Group",
+      y = "Odds"
+    )
+}
 ```
 
-## 4.1.3 Grouped by age
 ```{r}
-calculate_odds(ch_b_age)
+plot_odds(ch_b_sex_odds)
 ```
 
-## 4.1.4 Grouped by education
+### Grouped by race
 ```{r}
-calculate_odds(ch_b_education)
-```
-
-## 4.1.5 Grouped by state
-```{r}
-state_odds <- calculate_odds(ch_b_state)
+(ch_b_race_odds <- calculate_odds(ch_b_race))
+which.max(ch_b_race_odds[1, ])
+which.min(ch_b_race_odds[1, ])
 ```
 
 ```{r}
-plot(state_odds[1, ], type = "l")
-which.max(state_odds[1, ])
-which.min(state_odds[1, ])
+plot_odds(ch_b_race_odds)
 ```
 
-# Interactions
-## Males
+### Grouped by age
+```{r}
+(ch_b_age_odds <- calculate_odds(ch_b_age))
+which.max(ch_b_age_odds[1, ])
+which.min(ch_b_age_odds[1, ])
+```
+
+```{r}
+plot_odds(ch_b_age_odds)
+```
+
+### Grouped by education
+```{r}
+(ch_b_education_odds <- calculate_odds(ch_b_education))
+which.max(ch_b_education_odds[1, ])
+which.min(ch_b_education_odds[1, ])
+```
+
+```{r}
+plot_odds(ch_b_education_odds)
+```
+
+### Grouped by state
+```{r}
+(ch_b_state_odds <- calculate_odds(ch_b_state))
+which.max(ch_b_state_odds[1, ])
+which.min(ch_b_state_odds[1, ])
+```
+
+```{r}
+plot_odds(ch_b_state_odds) +
+  coord_flip()
+```
+
+## Interactions
+### Males
 
 Calculate mean values and log-odds limits for each race-education combination. Then take exponents of them.
 
@@ -323,15 +371,83 @@ ch_b_education_cube <- aperm(ch_b_education_cube, c(1, 3, 2))
 
 dimnames(ch_b_education_cube) <- dimnames(ch_b_race_education)
 
-total <- ch_bo_cube + ch_b_sex[, "1.Male"] + ch_race_cube + ch_b_education_cube + ch_b_race_education
-
+total_male <- ch_bo_cube + ch_b_sex[, "1.Male"] + ch_race_cube + ch_b_education_cube + ch_b_race_education
+total_female <- ch_bo_cube + ch_b_sex[, "2.Female"] + ch_race_cube + ch_b_education_cube + ch_b_race_education
 ```
 
 ```{r}
-apply(total, c(2, 3), function(x) mean(x))
+(orM_mean <- apply(total_male, c(2, 3), function(x) mean(x)))
+(orM_HDI <- apply(total_male, c(2, 3), function(x) hdi(x)))
+exp(orM_mean)
+exp(orM_HDI)
 ```
 
+Define convenience functions for plotting:
+```{r}
+data_frame_interaction <- function(interaction_matrix) {
+  interaction_matrix %>% 
+  data.frame() %>% 
+  rownames_to_column(var = "race") %>% 
+  gather(key = "education", value = "odds", -1) %>% 
+  mutate(race = str_remove_all(race, "\\d\\."),
+         education = str_remove_all(education, "^X\\d\\.") %>% 
+           add_spaces())
+}
 
+plot_interaction_odds <- function(interaction_matrix, title = NULL, subtitle = NULL) {
+  data_frame_interaction(interaction_matrix) %>%
+    group_by(race) %>%
+    arrange(desc(odds), .by_group = TRUE) %>%
+    add_count(race) %>%
+    mutate(ordered_groups = factor(rep(1:n[[1]]), ordered = TRUE)) %>%
+    ungroup() %>%
+    ggplot(aes(race, odds, fill = education, group = ordered_groups)) +
+    geom_col(position = "dodge") +
+    geom_label(
+      aes(label = round(odds, 2), group = ordered_groups),
+      fill = "white",
+      position = position_dodge(width = .9),
+      size = 2
+    ) +
+    scale_fill_viridis_d(name = NULL) +
+    labs(title = title,
+         subtitle = subtitle,
+         caption = "Note: Values are odds of supporting Obama.",
+         x = "Race",
+         y = "Odds") +
+    theme(
+      axis.title.y = element_blank(),
+      axis.text.y = element_blank(),
+      axis.line.y = element_blank(),
+      axis.ticks.y = element_blank(),
+      axis.ticks.x = element_blank(),
+      legend.position = "top"
+    )
+}
+
+```
+
+```{r fig.asp=.80}
+plot_interaction_odds(orM_mean, title = "Black Males with Some College Show Highest Support for Obama",
+                      subtitle = "White Males with No College Show Least Support")
+```
+
+### Females
+Calculate mean and HDI of each column of the cube.
+
+Compare groups.
+```{r}
+(orF_mean <- apply(total_female, c(2, 3), function(x) mean(x)))
+(orF_HDI <- apply(total_female, c(2, 3), function(x) hdi(x)))
+exp(orF_mean)
+exp(orF_HDI)
+```
+
+```{r fig.asp=.80}
+plot_interaction_odds(orF_mean, 
+                      title = "Black Females with Some College Also Show Highest Support for Obama",
+                      subtitle = "White Females with No College Show Least Support")
+```
 
 
 
