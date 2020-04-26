@@ -1,1 +1,7 @@
-# Bayesian-Methods
+# Bayesian Methods
+
+This repository contains code and materials for [University of Chicago Graham School's](https://grahamschool.uchicago.edu/academic-programs/masters-degrees/analytics) graduate course Bayesian Methods.
+
+## Course Description
+
+Bayesian inference is a method of statistical learning in which Bayes' theorem is used to understand probability distributions of unobserved variables, like model parameters or predictions for future observations. Bayesian analysis is especially important because it naturally allows updating the probability for a model or hypothesis as more evidence or information becomes available. This property of Bayesian approach plays significant role in dynamic analysis of a sequences of data. Applications of Bayesian analysis have exploded in recent period thanks to advances in computing techniques that made Bayesian approaches like Gibbs sampling, Markov Chain Monte Carlo, Dirichlet processes the main tools for advanced machine learning. The focus of this course is on foundations of Bayesian approach, its applications via hierarchical models, linear and generalized linear models, mixed models and various types of Bayesian decision making. Students will learn necessary facts of probability theory, fundamentals of Bayesian method as well as most modern applications of the approach by accessing through R important software products for efficient sampling: JAGS and STAN. Students, are expected to be comfortable with coding in R and ready to learn new concepts of theory and practice of Bayesian approach.
