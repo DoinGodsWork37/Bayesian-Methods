@@ -42,6 +42,7 @@ omega <- .05
 kappa <- 100
 a <- omega * (kappa - 2) + 1
 b <- (1 - omega) * (kappa - 2) + 1
+paste0("a: ", a," ", "b: ", b)
 ```
 
 ```{r}
@@ -54,9 +55,9 @@ abline(v = .05)
 ```{r}
 (smple <- c(rep(0, times = 92), rep(1, times = 8)))
 (k <- sum(smple))
+(s <- length(smple))
 postA <- k + a
 postB <- s - k + b
-(s <- length(smple))
 posteriorBetaDens <- dbeta(x, shape1 = postA, shape2 = postB)
 
 postA <- k + a

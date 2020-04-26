@@ -107,7 +107,7 @@ init <- c(10, -10)
 
 Plot MCMC trajectory and rejected proposals.
 ```{r Run-MCMC}
-run_mcmc <- function(iterations, init, sigProp) {
+run_mcmc <- function(iterations, init, denParams, sigProp) {
   result <-
     data.frame(
       x1 = vector("numeric", iterations),
@@ -116,7 +116,7 @@ run_mcmc <- function(iterations, init, sigProp) {
     )
   
   for (i in 1:iterations) {
-    result[i, ] <- oneStep(den, init, myDenParams, sigProp)
+    result[i, ] <- oneStep(den, init, denParams, sigProp)
     init <- switch(result$accept[[i]] + 1,
                    init,
                    c(result$x1[[i]], result$x2[[i]]))
@@ -126,7 +126,7 @@ run_mcmc <- function(iterations, init, sigProp) {
 }
 
 set.seed(1)
-result <- run_mcmc(10000, c(10, -10), .05)
+result <- run_mcmc(10000, c(10, -10), myDenParams, .05)
 
 result_plot <- result %>% 
   mutate(accept = factor(accept, levels = c(0, 1), labels = c("Rejection", "Trajectory")))
@@ -154,11 +154,12 @@ multi_result <- furrr::future_pmap(
   list(
     iterations = rep(iteration, each = length(runs)),
     init = init,
+    denParams = rerun(length(runs), myDenParams),
     sigProp = rep(sd, each = length(runs)),
     runs = runs
   ),
-  function(iterations, init, sigProp, runs) {
-    run_mcmc(iterations, init, sigProp) %>% 
+  function(iterations, init, denParams, sigProp, runs) {
+    run_mcmc(iterations, init, denParams, sigProp) %>% 
       mutate(run = runs)
   })
 
@@ -196,20 +197,22 @@ We define two functions for exploration:
 2. `metropolis_grid`: used to visualize the results of our exploration 
 
 ```{r Different-sigma}
-multi_start <- function(runs, iteration, seed = NULL, sd) {
+multi_start <- function(runs, iteration, denParams, seed = NULL, sd) {
   set.seed(seed)
   init <- rerun(length(runs), sample(-75:75, 2))
+  denParams <- rerun(length(runs), denParams)
   
   plan(multiprocess)
   multi_result <- furrr::future_pmap(
     list(
       iterations = rep(iteration, each = length(runs)),
       init = init,
+      denParams = denParams,
       sigProp = rep(sd, each = length(runs)),
       runs = runs
     ),
-    function(iterations, init, sigProp, runs) {
-      run_mcmc(iterations, init, sigProp) %>% 
+    function(iterations, init, denParams, sigProp, runs) {
+      run_mcmc(iterations, init, denParams, sigProp) %>% 
         mutate(run = runs)
     })
   
@@ -230,7 +233,7 @@ multi_start <- function(runs, iteration, seed = NULL, sd) {
   list(plot_data = plot_all_data, start = start, end = end, sd = sd)
 }
 
-metropolis_grid <- function(param, runs, columns, iterations = NULL, sd_test = FALSE, default_sd = NULL, seed = NULL) {
+metropolis_grid <- function(param, denParams, runs, columns, iterations = NULL, sd_test = FALSE, default_sd = NULL, seed = NULL) {
   
   if (!sd_test & is.null(default_sd)) {
     stop("default_sd is NULL. Specification required for sd_test.")
@@ -252,6 +255,7 @@ metropolis_grid <- function(param, runs, columns, iterations = NULL, sd_test = F
       furrr::future_map(param, ~ multi_start(
                           runs,
                           iteration = iterations,
+                          denParams = denParams,
                           seed = seed,
                           sd = .x
                         ))
@@ -260,6 +264,7 @@ metropolis_grid <- function(param, runs, columns, iterations = NULL, sd_test = F
       furrr::future_map(param, ~ multi_start(
                           runs,
                           iteration = .x,
+                          denParams = denParams,
                           seed = seed,
                           sd = sd
                         ))
@@ -302,7 +307,8 @@ There are two noticeable factors that influence the agreement among random start
 ```{r Plot-sd-grids, fig.width=10}
 metropolis_grid(
   param = seq(.025, .4, .075),
-  runs = 1:3,
+  denParams = myDenParams,
+  runs = 1:6,
   iterations = 10000,
   sd_test = TRUE,
   columns = 3,
@@ -311,7 +317,8 @@ metropolis_grid(
 
 metropolis_grid(
   param = seq(0.475, .8, .055),
-  runs = 1:3,
+  denParams = myDenParams,
+  runs = 1:6,
   iteration = 10000,
   sd_test = TRUE,
   columns = 3,
@@ -323,6 +330,7 @@ And `iterations`:
 ```{r Plot-iteration-grids, fig.width=10}
 metropolis_grid(
   param = seq(1000, 50000, 9000),
+  denParams = myDenParams,
   default_sd = .05,
   runs = 1:3,
   columns = 3,
@@ -331,6 +339,7 @@ metropolis_grid(
 
 metropolis_grid(
   param = seq(54000, 100000, 9000),
+  denParams = myDenParams,
   default_sd = .05,
   runs = 1:3,
   columns = 3,
@@ -338,11 +347,13 @@ metropolis_grid(
 )
 ```
 
+# Animation
+
 ```{r Animate, eval=FALSE, dpi=800}
 runs <- 1:3
 iterations <- 500
 sd <- .1032424
-dat <- multi_start(runs = runs, iteration = iterations, sd = sd)
+dat <- multi_start(runs = runs, iteration = iterations, denParams = myDenParams, sd = sd)
 
 dat$plot_data %>%
   group_by(run) %>% 
@@ -373,6 +384,7 @@ a <- dat$plot_data %>%
   NULL
 
 # Create plotly graph
+library(plotly)
 ggplotly(a) %>%
   animation_opts(frame = 20,
                  easing = "linear",
